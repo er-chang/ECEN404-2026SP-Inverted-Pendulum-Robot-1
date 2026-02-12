@@ -7,16 +7,16 @@ void Delay_us(uint16_t us){
 }
 
 
-void HCSR04_Trigger(void)
+void HCSR04_Trigger(GPIO_TypeDef* GPIOx, uint16_t PINx)
 {
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOx, PINx, GPIO_PIN_SET);
     Delay_us(10);// ≈ 10µs on most STM32F4
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOx, PINx, GPIO_PIN_RESET);
 }
 
 
-float getSonarDistance(void){
-	HCSR04_Trigger();
+float getSonarDistance(Ultrasonic sonar){
+	HCSR04_Trigger(sonar.input_port, sonar.input_pin);
 
 	HAL_Delay(60);
 

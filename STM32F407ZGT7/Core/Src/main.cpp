@@ -17,15 +17,31 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
+#include <peripherals.h>
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+struct Ultrasonic{
+	GPIO_TypeDef*	input_port;
+	uint16_t		input_pin;
+	GPIO_TypeDef*	output_port;
+	uint16_t		output_pin;
+
+	volatile uint32_t echo_start;
+	volatile uint32_t echo_end;
+	uint32_t dist;
+};
+
+struct Motor{
+	uint32_t duty = 0;
+	GPIO_PinState direction = GPIO_PIN_SET;
+};
 
 /* USER CODE END PTD */
 
@@ -45,7 +61,15 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
+Ultrasonic sensor_front = {.input_port = GPIOA, .input_pin = GPIO_PIN_9,
+						   .output_port = GPIOA, .output_pin = GPIO_PIN_9};
+Ultrasonic sensor_left;
+Ultrasonic sensor_right;
 
+Motor front_left;
+Motor front_right;
+Motor back_left;
+Motor back_right;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -55,12 +79,20 @@ static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
-
+float getSonarDistance(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+// DEBUGGING FUNCTION FOR TERMINAL PRINTING
+int _write(int32_t file, uint8_t *ptr, int32_t len)
+{
+    for (int i = 0; i < len; i++)
+    {
+        ITM_SendChar(*ptr++);
+    }
+    return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -96,7 +128,11 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_TIM_Base_Start(&htim2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -404,6 +440,21 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	switch (GPIO_Pin){
+	case sensor_front.output_pin:
+		if (HAL_GPIO_ReadPin(sensor_front.output_port, sensor_front.output_pin) == GPIO_PIN_SET){
+	        // Rising edge -> echo started
+			sensor_front.echo_start = __HAL_TIM_GET_COUNTER(&htim2);
+		}
+		else{
+	        // Falling edge -> echo ended
+			sensor_front.echo_end = __HAL_TIM_GET_COUNTER(&htim2);
+		}
+		break;
+	};
+}
 
 /* USER CODE END 4 */
 
