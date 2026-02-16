@@ -21,17 +21,16 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <peripherals.h> // Where most peripheral functions are stored
+#include <stdio.h>  // For console printing and other system functions.
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -40,11 +39,20 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+// TIMER HANDLES - Reference for most timer functions
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
+int DC = 0; // TEMP variable for Duty Cycle / Controls Testing. For Duty Cycle tracking.
+
+// Moustafa's PID Variables
+float dist_cm; // Distance of front of robot to obstruction in cm.
+float dist_m; // Same distance in meters.
+float pos_error; //I DONT KNOW, PLEASE FILL IN MOUSTAFA
+float kp = 0.00357f; // I ALSO DONT KNOW
+float target_angle; // Desired angle to return to stabilization.
 
 /* USER CODE END PV */
 
@@ -55,6 +63,15 @@ static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
+// KEEP - This is for debugging prints to console. IT IS NEEDED.
+int _write(int32_t file, uint8_t *ptr, int32_t len)
+{
+    for (int i = 0; i < len; i++)
+    {
+        ITM_SendChar(*ptr++);
+    }
+    return len;
+}
 
 /* USER CODE END PFP */
 
@@ -97,12 +114,58 @@ int main(void)
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
 
+  // Starting all necessary timers.
+  HAL_TIM_Base_Start(&htim2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+  // MAIN WHILE LOOP - FOR MOST CONTROL CODE
+  // The loop is currently very basic, structs had to be discarded, compiler wasn't understanding
+  // them for some reason.
   while (1)
   {
+
+	  // Get front ultrasonic sensor distance in centimeters. Need to specify ports and pins of sensor now.
+	  // WILL CHANGE
+	  dist_cm = getSonarDistance(GPIOA, GPIO_PIN_9, GPIOA, GPIO_PIN_10, &htim2);
+	  //					    ^^^Trigger Part^^^	^^^ Echo Part ^^^      ^^Timer for Delay_us
+	  dist_m = dist_cm / 100.0f; // Convert to meters.
+
+	  // 2. PID LOGIC CALCULATION
+	  // Goal: Maintain 0.5 meters
+	  pos_error = 0.5f - dist_m;
+
+	  // Calculate needed angle.
+	  target_angle = kp * pos_error;
+
+	  // 3. PRINT FOR VALIDATION
+	  // Logic Check:
+	  // If Dist > 0.5m (Too Far) -> Error is Negative -> Angle should be NEGATIVE
+	  // If Dist < 0.5m (Too Close) -> Error is Positive -> Angle should be POSITIVE
+	  printf("Dist: %.2f m | Error: %.3f | PID Output (Target Angle): %.5f rad\n", dist_m, pos_error, target_angle);
+
+	  // Simple motor control logic for testing.
+	  if (dist_cm < 50.0){
+		  TIM1->CCR1 = 0;
+		  TIM1->CCR2 = 0;
+		  TIM1->CCR3 = 0;
+		  TIM8->CCR3 = 0;
+	  }
+	  else{
+		  TIM1->CCR1 = 150;
+		  TIM1->CCR2 = 150;
+		  TIM1->CCR3 = 150;
+		  TIM8->CCR3 = 150;
+	  }
+
+	  HAL_Delay(100); // 10Hz print rate
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -364,22 +427,39 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_14, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(US_Trigger_GPIO_Port, US_Trigger_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PF13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  /*Configure GPIO pins : PF13 PF14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PF15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PG0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /*Configure GPIO pin : US_Trigger_Pin */
   GPIO_InitStruct.Pin = US_Trigger_Pin;
@@ -404,7 +484,22 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+// External interrupt handler
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    // Check if the interrupt comes from the Echo Pin
+	if (GPIO_Pin == GPIO_PIN_10)
+    {
+		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_SET){
+	        // Rising edge -> echo started
+			echo_start = __HAL_TIM_GET_COUNTER(&htim2);
+		}
+		else{
+	        // Falling edge -> echo ended
+			echo_end = __HAL_TIM_GET_COUNTER(&htim2);
+		}
+	}
+}
 /* USER CODE END 4 */
 
 /**
