@@ -31,6 +31,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define MAX_SPEED 256
+#define MIN_SPEED 0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,6 +56,31 @@ float pos_error; //I DONT KNOW, PLEASE FILL IN MOUSTAFA
 float kp = 0.00357f; // I ALSO DONT KNOW
 float target_angle; // Desired angle to return to stabilization.
 
+// Ultrasonic Sensors
+Ultrasonic frontSensor = {
+		.TriggerPort = 	GPIOA,
+		.EchoPort =		GPIOA,
+		.TriggerPin =	GPIO_PIN_9,
+		.EchoPin =		GPIO_PIN_10,
+		.timer = 		&htim2
+};
+Ultrasonic leftSensor;
+Ultrasonic rightSesnor;
+
+// Motors
+Motor FLM = {
+		.PWM = &TIM1->CCR1
+};
+Motor FRM = {
+		.PWM = &TIM1->CCR2
+};
+Motor BLM = {
+		.PWM = &TIM1->CCR3
+};
+Motor BRM = {
+		.PWM = &TIM8->CCR3
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -64,15 +91,7 @@ static void MX_TIM1_Init(void);
 static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 // KEEP - This is for debugging prints to console. IT IS NEEDED.
-int _write(int32_t file, uint8_t *ptr, int32_t len)
-{
-    for (int i = 0; i < len; i++)
-    {
-        ITM_SendChar(*ptr++);
-    }
-    return len;
-}
-
+int _write(int32_t file, uint8_t *ptr, int32_t len);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -134,9 +153,9 @@ int main(void)
 
 	  // Get front ultrasonic sensor distance in centimeters. Need to specify ports and pins of sensor now.
 	  // WILL CHANGE
-	  dist_cm = getSonarDistance(GPIOA, GPIO_PIN_9, GPIOA, GPIO_PIN_10, &htim2);
+	  frontSensor.distance = getSonarDistance(frontSensor);
 	  //					    ^^^Trigger Part^^^	^^^ Echo Part ^^^      ^^Timer for Delay_us
-	  dist_m = dist_cm / 100.0f; // Convert to meters.
+	  dist_m = (float)frontSensor.distance / 100.0f; // Convert to meters.
 
 	  // 2. PID LOGIC CALCULATION
 	  // Goal: Maintain 0.5 meters
@@ -149,21 +168,24 @@ int main(void)
 	  // Logic Check:
 	  // If Dist > 0.5m (Too Far) -> Error is Negative -> Angle should be NEGATIVE
 	  // If Dist < 0.5m (Too Close) -> Error is Positive -> Angle should be POSITIVE
-	  printf("Dist: %.2f m | Error: %.3f | PID Output (Target Angle): %.5f rad\n", dist_m, pos_error, target_angle);
+	  //printf("Dist: %.2f m | Error: %.3f | PID Output (Target Angle): %.5f rad\n", dist_m, pos_error, target_angle);
 
+	  printf("Distance: %.2fcm", frontSensor.distance);
 	  // Simple motor control logic for testing.
-	  if (dist_cm < 50.0){
-		  TIM1->CCR1 = 0;
-		  TIM1->CCR2 = 0;
-		  TIM1->CCR3 = 0;
-		  TIM8->CCR3 = 0;
+	  if (frontSensor.distance < 50.0){
+		  setSpeed(FLM, MIN_SPEED);
+		  setSpeed(FRM, MIN_SPEED);
+		  setSpeed(BLM, MIN_SPEED);
+		  setSpeed(BRM, MIN_SPEED);
 	  }
 	  else{
-		  TIM1->CCR1 = 150;
-		  TIM1->CCR2 = 150;
-		  TIM1->CCR3 = 150;
-		  TIM8->CCR3 = 150;
+		  setSpeed(FLM, MAX_SPEED);
+		  setSpeed(FRM, MAX_SPEED);
+		  setSpeed(BLM, MAX_SPEED);
+		  setSpeed(BRM, MAX_SPEED);
 	  }
+
+	  printf("Speed: %x", &FLM.PWM);
 
 	  HAL_Delay(100); // 10Hz print rate
     /* USER CODE END WHILE */
@@ -488,17 +510,27 @@ static void MX_GPIO_Init(void)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     // Check if the interrupt comes from the Echo Pin
-	if (GPIO_Pin == GPIO_PIN_10)
+	if (GPIO_Pin == frontSensor.EchoPin)
     {
-		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_SET){
+		if (HAL_GPIO_ReadPin(frontSensor.EchoPort, frontSensor.EchoPin) == GPIO_PIN_SET){
 	        // Rising edge -> echo started
-			echo_start = __HAL_TIM_GET_COUNTER(&htim2);
+			frontSensor.echo_start = __HAL_TIM_GET_COUNTER(frontSensor.timer);
 		}
 		else{
 	        // Falling edge -> echo ended
-			echo_end = __HAL_TIM_GET_COUNTER(&htim2);
+			frontSensor.echo_end = __HAL_TIM_GET_COUNTER(frontSensor.timer);
 		}
 	}
+}
+
+// Printf to ITM Debugging Console
+int _write(int32_t file, uint8_t *ptr, int32_t len)
+{
+    for (int i = 0; i < len; i++)
+    {
+        ITM_SendChar(*ptr++);
+    }
+    return len;
 }
 /* USER CODE END 4 */
 
