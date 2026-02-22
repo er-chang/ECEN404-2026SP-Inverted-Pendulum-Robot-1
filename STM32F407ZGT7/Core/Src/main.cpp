@@ -158,7 +158,7 @@ int loop_counter = 5;
               //TIM1->CCR1 = 0; TIM1->CCR2 = 0; TIM1->CCR3 = 0; TIM8->CCR3 = 0;
               //HAL_Delay(10);
               //continue;
-          }
+
           // 4. OUTER PID LOOP
           pos_error = 0.5f - dist_m;
           target_angle = -(kp * pos_error);
@@ -186,7 +186,7 @@ int loop_counter = 5;
           TIM8->CCR3 = final_speed;
           HAL_Delay(10);
     }
-   /* USER CODE END WHILE */
+}   /* USER CODE END WHILE */
    /* USER CODE BEGIN 3 */
  /* USER CODE END 3 */
 /**

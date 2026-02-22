@@ -111,7 +111,7 @@ void Read_Accel(IMU* imu, I2C_HandleTypeDef* i2c)
    imu->accel.g_x = (float)x * 0.061f / 1000.0f;
    imu->accel.g_y = (float)y * 0.061f / 1000.0f;
    imu->accel.g_z = (float)(z * 0.061f / 1000.0f);
-   //printf("Linear Acceleration -> X: %.3f, Y: %.3f, Z: %.3f g\n\n", imu->accel.g_x, imu->accel.g_y, imu->accel.g_z);
+   printf("Linear Acceleration -> X: %.3f, Y: %.3f, Z: %.3f g\n\n", imu->accel.g_x, imu->accel.g_y, imu->accel.g_z);
 }
 /*Gyroscope Read Function*/
 void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
@@ -127,7 +127,7 @@ void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
    imu->gyro.dps_x = (float)x * 3.815f / 1000.0f;  // Convert mdps to dps
    imu->gyro.dps_y = (float)y * 3.815f / 1000.0f;
    imu->gyro.dps_z = (float)(z * 3.815f / 1000.0f);
-   //printf("Angular Acceleration -> X: %.3f, Y: %.3f, Z: %.3f dps\n\n", imu->gyro.dps_x, imu->gyro.dps_y, imu->gyro.dps_z);
+   printf("Angular Acceleration -> X: %.3f, Y: %.3f, Z: %.3f dps\n\n", imu->gyro.dps_x, imu->gyro.dps_y, imu->gyro.dps_z);
 }
 /*IMU Initialization Function*/
 void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){
