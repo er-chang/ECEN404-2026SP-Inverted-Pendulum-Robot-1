@@ -135,12 +135,16 @@ IMU_Init(&imu, &hi2c2);
 /* Infinite loop */
 /* USER CODE BEGIN WHILE */
 // MAIN WHILE LOOP - FOR MOST CONTROL CODE
-int loop_counter = 5;
+int loop_counter = 0;
     while (1)
     {
           // 1.  SENSORS
           Read_Accel(&imu, &hi2c2);
           Read_Gyro(&imu, &hi2c2);
+          static float filtered_gyro = 0.0f;
+          filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
+          float theta_dot = filtered_gyro * (3.14159f / 180.0f);
+          float pitch_accel = atan2(imu.accel.g_z, imu.accel.g_x);
           // Sonar: Only ping the sensor every 5th loop (50ms) so echoes don't overlap
           loop_counter++;
           if (loop_counter >= 5) {
@@ -169,9 +173,9 @@ int loop_counter = 5;
           balance_error = theta - target_angle;
           motor_effort = (23.6952f * balance_error) + (1.9479f * theta_dot);
           // 6. ACTUATION
-          final_speed = (int)(fabs(motor_effort) * 150.0f);
+          final_speed = (int)(fabs(motor_effort) * 80.0f);
           // DEADBAND COMPENSATION
-          if (final_speed > 0 && final_speed < 40) final_speed = 40;
+          if (final_speed > 0 && final_speed < 25) final_speed = 25;
           if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
           if (final_speed < MIN_SPEED) final_speed = MIN_SPEED;
           drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
