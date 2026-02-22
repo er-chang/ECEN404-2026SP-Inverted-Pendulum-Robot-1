@@ -59,11 +59,20 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define US_Trigger_Pin GPIO_PIN_9
-#define US_Trigger_GPIO_Port GPIOA
-#define US_Echo_Pin GPIO_PIN_10
-#define US_Echo_GPIO_Port GPIOA
-#define US_Echo_EXTI_IRQn EXTI15_10_IRQn
+#define Trig1_Pin GPIO_PIN_9
+#define Trig1_GPIO_Port GPIOA
+#define Echo1_Pin GPIO_PIN_10
+#define Echo1_GPIO_Port GPIOA
+#define Echo1_EXTI_IRQn EXTI15_10_IRQn
+#define Trig3_Pin GPIO_PIN_10
+#define Trig3_GPIO_Port GPIOC
+#define Echo3_Pin GPIO_PIN_11
+#define Echo3_GPIO_Port GPIOC
+#define Echo3_EXTI_IRQn EXTI15_10_IRQn
+#define Echo2_Pin GPIO_PIN_9
+#define Echo2_GPIO_Port GPIOG
+#define Trig2_Pin GPIO_PIN_14
+#define Trig2_GPIO_Port GPIOG
 
 /* USER CODE BEGIN Private defines */
 
