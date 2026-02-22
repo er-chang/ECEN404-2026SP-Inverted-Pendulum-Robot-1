@@ -135,7 +135,7 @@ IMU_Init(&imu, &hi2c2);
 /* Infinite loop */
 /* USER CODE BEGIN WHILE */
 // MAIN WHILE LOOP - FOR MOST CONTROL CODE
-int loop_counter = 0;
+int loop_counter = 5;
     while (1)
     {
           // 1.  SENSORS
