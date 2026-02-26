@@ -43,8 +43,10 @@ TIM_HandleTypeDef htim8;
 /* USER CODE BEGIN PV */
 // Moustafa's PID Variables
 float dist_m; // Same distance in meters.
-float pos_error; //I DONT KNOW, PLEASE FILL IN MOUSTAFA
-float kp = 0.00357f; // I ALSO DONT KNOW
+float pos_error; //calculates the position error
+float kp = 1.65232f; // PID_calc from matlab -> |Kp|
+float ki = 0.04117f; // PID_calc from matlab -> |Ki|
+float kd = 3.20583f; // PID_calc from matlab -> |Kd|
 float target_angle; // Desired angle to return to stabilization.
 int test_speed;
 float target_dist;
@@ -134,7 +136,7 @@ IMU_Init(&imu, &hi2c2);
 /* USER CODE END 2 */
 /* Infinite loop */
 /* USER CODE BEGIN WHILE */
-// MAIN WHILE LOOP - FOR MOST CONTROL CODE
+// MAIN WHILE LOOP -  CONTROL CODE
 int loop_counter = 0;
     while (1)
     {
@@ -144,6 +146,7 @@ int loop_counter = 0;
           static float filtered_gyro = 0.0f;
           filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
           float theta_dot = filtered_gyro * (3.14159f / 180.0f);
+          // atan2(g_z, g_x) a = g_x~1g, g_z~0.
           float pitch_accel = atan2(imu.accel.g_z, imu.accel.g_x);
           // Sonar: Only ping the sensor every 5th loop (50ms) so echoes don't overlap
           loop_counter++;
@@ -151,27 +154,29 @@ int loop_counter = 0;
               frontSensor.distance = getSonarDistance(&frontSensor);
               dist_m = (float)frontSensor.distance / 100.0f;
               loop_counter = 0;
+              // 4. OUTER PID LOOP
+              static float pos_integral = 0.0f;
+              static float pos_prev_error = 0.0f;
+              pos_error = 0.5f - dist_m;
+              pos_integral += pos_error * 0.05f; // dt = 50ms (5 x 10ms loops)
+              if (pos_integral >  0.1f) pos_integral =  0.1f; // anti-windup clamp
+              if (pos_integral < -0.1f) pos_integral = -0.1f;
+              float pos_derivative = (pos_error - pos_prev_error) / 0.05f;
+              pos_prev_error = pos_error;
+              target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
+              if (target_angle >  0.26f) target_angle =  0.26f;
+              if (target_angle < -0.26f) target_angle = -0.26f;
           }
           // 2. FILTER & UNIT CONVERSION
-          theta_dot = imu.gyro.dps_y * (3.14159f / 180.0f); // DPS to Rad/s
-          pitch_accel = atan2(imu.accel.g_z, imu.accel.g_x);
-          theta = 0.0f;
           theta = 0.98f * (theta + (theta_dot * 0.01f)) + 0.02f * pitch_accel;
           // 3. SAFETY KILL-SWITCH
          // if (fabs(theta) > 0.78f) {
               //TIM1->CCR1 = 0; TIM1->CCR2 = 0; TIM1->CCR3 = 0; TIM8->CCR3 = 0;
               //HAL_Delay(10);
               //continue;
-
-          // 4. OUTER PID LOOP
-          pos_error = 0.5f - dist_m;
-          target_angle = -(kp * pos_error);
-          // Clamp lean angle to ~15 degrees
-          if (target_angle > 0.26f) target_angle = 0.26f;
-          if (target_angle < -0.26f) target_angle = -0.26f;
           // 5. INNER LQR LOOP
           balance_error = theta - target_angle;
-          motor_effort = (23.6952f * balance_error) + (1.9479f * theta_dot);
+          motor_effort = (26.0041f * balance_error) + (3.1706f * theta_dot);
           // 6. ACTUATION
           final_speed = (int)(fabs(motor_effort) * 80.0f);
           // DEADBAND COMPENSATION
@@ -190,7 +195,7 @@ int loop_counter = 0;
           TIM8->CCR3 = final_speed;
           HAL_Delay(10);
     }
-}   /* USER CODE END WHILE */
+}   /* control CODE END WHILE */
    /* USER CODE BEGIN 3 */
  /* USER CODE END 3 */
 /**

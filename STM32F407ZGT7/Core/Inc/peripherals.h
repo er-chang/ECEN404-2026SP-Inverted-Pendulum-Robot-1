@@ -76,18 +76,19 @@ void Delay_us(uint16_t us, TIM_HandleTypeDef* tim){
 }
 /*SONAR DISTANCE*/
 float getSonarDistance(Ultrasonic* sensor){
-	// A. Trigger the pulse
-	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_SET);
-	Delay_us(10, sensor->timer); // 10us pulse
-	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_RESET);
-	// B. Wait for measurement // Max range ~5m takes 30ms
-	HAL_Delay(60);
-	// C. Calculate
+	// A. Compute distance from the previous echo captured asynchronously by the EXTI ISR
+	float distance = 0.0f;
 	if (sensor->echo_end > sensor->echo_start) {
 		uint32_t echo_width = sensor->echo_end - sensor->echo_start;
-		return (float)echo_width * 0.01715f;
+		distance = (float)echo_width * 0.01715f;
 	}
-	return 0.0f; // Error / Timeout
+	// B. Reset timestamps and fire a new trigger pulse for the next call
+	sensor->echo_start = 0;
+	sensor->echo_end = 0;
+	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_SET);
+	Delay_us(10, sensor->timer);
+	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_RESET);
+	return distance;
 }
 /*MOTOR SPEED*/
 void setSpeed(Motor* motor, uint32_t speed, GPIO_PinState direction){
@@ -111,7 +112,6 @@ void Read_Accel(IMU* imu, I2C_HandleTypeDef* i2c)
    imu->accel.g_x = (float)x * 0.061f / 1000.0f;
    imu->accel.g_y = (float)y * 0.061f / 1000.0f;
    imu->accel.g_z = (float)(z * 0.061f / 1000.0f);
-   printf("Linear Acceleration -> X: %.3f, Y: %.3f, Z: %.3f g\n\n", imu->accel.g_x, imu->accel.g_y, imu->accel.g_z);
 }
 /*Gyroscope Read Function*/
 void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
@@ -127,7 +127,6 @@ void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
    imu->gyro.dps_x = (float)x * 3.815f / 1000.0f;  // Convert mdps to dps
    imu->gyro.dps_y = (float)y * 3.815f / 1000.0f;
    imu->gyro.dps_z = (float)(z * 3.815f / 1000.0f);
-   printf("Angular Acceleration -> X: %.3f, Y: %.3f, Z: %.3f dps\n\n", imu->gyro.dps_x, imu->gyro.dps_y, imu->gyro.dps_z);
 }
 /*IMU Initialization Function*/
 void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){
