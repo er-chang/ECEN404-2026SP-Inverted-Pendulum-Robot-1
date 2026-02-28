@@ -69,10 +69,10 @@ typedef struct IMU{
 } IMU;
 /*End Typedefs*/
 /*FUNCTIONS*/
-/*MICROSECOND DELAY*/
+/*MICROSECOND DELAY — does NOT reset the timer so TIM2 can double as a loop clock*/
 void Delay_us(uint16_t us, TIM_HandleTypeDef* tim){
-	__HAL_TIM_SET_COUNTER(tim, 0);
-	while(__HAL_TIM_GET_COUNTER(tim) < us);
+	uint32_t start = __HAL_TIM_GET_COUNTER(tim);
+	while ((__HAL_TIM_GET_COUNTER(tim) - start) < us);
 }
 /*SONAR DISTANCE*/
 float getSonarDistance(Ultrasonic* sensor){
@@ -123,10 +123,10 @@ void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
    x = (int16_t)((imu->gyro.out[1] << 8) | imu->gyro.out[0]);
    y = (int16_t)((imu->gyro.out[3] << 8) | imu->gyro.out[2]);
    z = (int16_t)((imu->gyro.out[5] << 8) | imu->gyro.out[4]);
-   // Convert to dps (assuming ±250 dps full scale → 3.815 mdps/LSB)
-   imu->gyro.dps_x = (float)x * 3.815f / 1000.0f;  // Convert mdps to dps
-   imu->gyro.dps_y = (float)y * 3.815f / 1000.0f;
-   imu->gyro.dps_z = (float)(z * 3.815f / 1000.0f);
+   // Convert to dps (±250 dps full scale → 8.75 mdps/LSB per LSM6DSOX datasheet)
+   imu->gyro.dps_x = (float)x * 8.75f / 1000.0f;
+   imu->gyro.dps_y = (float)y * 8.75f / 1000.0f;
+   imu->gyro.dps_z = (float)z * 8.75f / 1000.0f;
 }
 /*IMU Initialization Function*/
 void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){

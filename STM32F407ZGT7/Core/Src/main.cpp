@@ -136,55 +136,76 @@ IMU_Init(&imu, &hi2c2);
 /* USER CODE END 2 */
 /* Infinite loop */
 /* USER CODE BEGIN WHILE */
-// MAIN WHILE LOOP -  CONTROL CODE
+// MAIN WHILE LOOP — CONTROL CODE
 int loop_counter = 0;
+const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
     while (1)
     {
-          // 1.  SENSORS
+          uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
+
+          // ── Measure real dt for the complementary filter ──
+          static uint32_t prev_time = 0;
+          float dt = (prev_time == 0) ? 0.005f
+                     : (float)(loop_start - prev_time) * 1e-6f;
+          if (dt > 0.05f || dt < 0.001f) dt = 0.005f; // sanity clamp
+          prev_time = loop_start;
+
+          // ── 1. SENSORS ──
           Read_Accel(&imu, &hi2c2);
           Read_Gyro(&imu, &hi2c2);
           static float filtered_gyro = 0.0f;
           filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
           float theta_dot = filtered_gyro * (3.14159f / 180.0f);
-          // atan2(g_z, g_x) a = g_x~1g, g_z~0.
-          float pitch_accel = atan2(imu.accel.g_z, imu.accel.g_x);
-          // Sonar: Only ping the sensor every 5th loop (50ms) so echoes don't overlap
+          // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
+          // Negates g_x so atan2(g_z, -g_x) = 0 when balanced.
+          float pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
+
+          // ── Sonar: fire every 10th loop (~50 ms) ──
           loop_counter++;
-          if (loop_counter >= 5) {
+          if (loop_counter >= 10) {
               frontSensor.distance = getSonarDistance(&frontSensor);
-              dist_m = (float)frontSensor.distance / 100.0f;
               loop_counter = 0;
-              // 4. OUTER PID LOOP
-              static float pos_integral = 0.0f;
-              static float pos_prev_error = 0.0f;
-              pos_error = 0.5f - dist_m;
-              pos_integral += pos_error * 0.05f; // dt = 50ms (5 x 10ms loops)
-              if (pos_integral >  0.1f) pos_integral =  0.1f; // anti-windup clamp
-              if (pos_integral < -0.1f) pos_integral = -0.1f;
-              float pos_derivative = (pos_error - pos_prev_error) / 0.05f;
-              pos_prev_error = pos_error;
-              target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
-              if (target_angle >  0.26f) target_angle =  0.26f;
-              if (target_angle < -0.26f) target_angle = -0.26f;
+              // HC-SR04 valid range: 2–400 cm.  Outside that → no object.
+              if (frontSensor.distance > 2.0f && frontSensor.distance < 400.0f) {
+                  dist_m = frontSensor.distance / 100.0f;
+                  // 4. OUTER PID LOOP
+                  static float pos_integral = 0.0f;
+                  static float pos_prev_error = 0.0f;
+                  pos_error = 0.5f - dist_m;
+                  pos_integral += pos_error * 0.05f;
+                  if (pos_integral >  0.1f) pos_integral =  0.1f;
+                  if (pos_integral < -0.1f) pos_integral = -0.1f;
+                  float pos_derivative = (pos_error - pos_prev_error) / 0.05f;
+                  pos_prev_error = pos_error;
+                  target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
+                  if (target_angle >  0.26f) target_angle =  0.26f;
+                  if (target_angle < -0.26f) target_angle = -0.26f;
+              } else {
+                  // No valid obstacle → just balance upright
+                  target_angle = 0.0f;
+              }
           }
-          // 2. FILTER & UNIT CONVERSION
-          theta = 0.98f * (theta + (theta_dot * 0.01f)) + 0.02f * pitch_accel;
+
+          // ── 2. COMPLEMENTARY FILTER (uses measured dt) ──
+          theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
+
           // 3. SAFETY KILL-SWITCH
          // if (fabs(theta) > 0.78f) {
               //TIM1->CCR1 = 0; TIM1->CCR2 = 0; TIM1->CCR3 = 0; TIM8->CCR3 = 0;
-              //HAL_Delay(10);
               //continue;
-          // 5. INNER LQR LOOP
+
+          // ── 5. INNER LQR LOOP ──
           balance_error = theta - target_angle;
           motor_effort = (26.0041f * balance_error) + (3.1706f * theta_dot);
-          // 6. ACTUATION
-          final_speed = (int)(fabs(motor_effort) * 80.0f);
-          // DEADBAND COMPENSATION
+
+          // ── 6. ACTUATION ──
+          const float PWM_SCALE = 50.0f;
+          final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
           if (final_speed > 0 && final_speed < 25) final_speed = 25;
           if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
           if (final_speed < MIN_SPEED) final_speed = MIN_SPEED;
           drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-          // APPLY TO MOTORS
+
           HAL_GPIO_WritePin(FLM.directionPort, FLM.directionPin, drive_dir);
           HAL_GPIO_WritePin(FRM.directionPort, FRM.directionPin, drive_dir);
           HAL_GPIO_WritePin(BLM.directionPort, BLM.directionPin, drive_dir);
@@ -193,7 +214,9 @@ int loop_counter = 0;
           TIM1->CCR2 = final_speed;
           TIM1->CCR3 = final_speed;
           TIM8->CCR3 = final_speed;
-          HAL_Delay(10);
+
+          // ── Spin-wait for precise loop period (replaces HAL_Delay) ──
+          while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
     }
 }   /* control CODE END WHILE */
    /* USER CODE BEGIN 3 */
