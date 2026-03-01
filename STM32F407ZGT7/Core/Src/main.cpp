@@ -137,6 +137,7 @@ IMU_Init(&imu, &hi2c2);
 /* Infinite loop */
 /* USER CODE BEGIN WHILE */
 // MAIN WHILE LOOP — CONTROL CODE
+//test
 int loop_counter = 0;
 const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
     while (1)
