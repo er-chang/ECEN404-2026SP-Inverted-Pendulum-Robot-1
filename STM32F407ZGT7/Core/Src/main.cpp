@@ -31,6 +31,7 @@
 /* USER CODE BEGIN PD */
 #define MAX_SPEED 256
 #define MIN_SPEED 0
+#define PWM_DEADZONE 25        // Minimum PWM to overcome motor static friction
 /* USER CODE END PD */
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
@@ -51,8 +52,6 @@ float target_angle; // Desired angle to return to stabilization.
 int test_speed;
 float target_dist;
 static float theta;
-float theta_dot;
-float pitch_accel;
 float balance_error;
 float motor_effort;
 int final_speed;
@@ -137,7 +136,6 @@ IMU_Init(&imu, &hi2c2);
 /* Infinite loop */
 /* USER CODE BEGIN WHILE */
 // MAIN WHILE LOOP — CONTROL CODE
-//test
 int loop_counter = 0;
 const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
     while (1)
@@ -166,17 +164,28 @@ const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
           if (loop_counter >= 10) {
               frontSensor.distance = getSonarDistance(&frontSensor);
               loop_counter = 0;
+
+
+              static uint32_t prev_outer_time = 0;
+              float outer_dt = (prev_outer_time == 0) ? 0.05f
+                               : (float)(loop_start - prev_outer_time) * 1e-6f;
+              if (outer_dt > 0.2f || outer_dt < 0.01f) outer_dt = 0.05f; // sanity clamp
+              prev_outer_time = loop_start;
+
               // HC-SR04 valid range: 2–400 cm.  Outside that → no object.
               if (frontSensor.distance > 2.0f && frontSensor.distance < 400.0f) {
-                  dist_m = frontSensor.distance / 100.0f;
+                  static float filtered_dist = 0.5f;
+                  filtered_dist = 0.7f * filtered_dist + 0.3f * (frontSensor.distance / 100.0f);
+                  dist_m = filtered_dist;
+
                   // 4. OUTER PID LOOP
                   static float pos_integral = 0.0f;
                   static float pos_prev_error = 0.0f;
                   pos_error = 0.5f - dist_m;
-                  pos_integral += pos_error * 0.05f;
+                  pos_integral += pos_error * outer_dt;
                   if (pos_integral >  0.1f) pos_integral =  0.1f;
                   if (pos_integral < -0.1f) pos_integral = -0.1f;
-                  float pos_derivative = (pos_error - pos_prev_error) / 0.05f;
+                  float pos_derivative = (pos_error - pos_prev_error) / outer_dt;
                   pos_prev_error = pos_error;
                   target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
                   if (target_angle >  0.26f) target_angle =  0.26f;
@@ -190,21 +199,28 @@ const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
           // ── 2. COMPLEMENTARY FILTER (uses measured dt) ──
           theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
 
-          // 3. SAFETY KILL-SWITCH
-         // if (fabs(theta) > 0.78f) {
-              //TIM1->CCR1 = 0; TIM1->CCR2 = 0; TIM1->CCR3 = 0; TIM8->CCR3 = 0;
-              //continue;
-
           // ── 5. INNER LQR LOOP ──
           balance_error = theta - target_angle;
-          motor_effort = (26.0041f * balance_error) + (3.1706f * theta_dot);
+
+          //         (CoM offset, surface slope, asymmetric weight on 4-wheel platform)
+          static float balance_integral = 0.0f;
+          balance_integral += balance_error * dt;
+          if (balance_integral >  0.5f) balance_integral =  0.5f;
+          if (balance_integral < -0.5f) balance_integral = -0.5f;
+
+          motor_effort = (26.0041f * balance_error)
+                       + (3.1706f * theta_dot)
+                       + (1.0f * balance_integral);  //integral term — tune 0.5–2.0
 
           // ── 6. ACTUATION ──
           const float PWM_SCALE = 50.0f;
           final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
-          if (final_speed > 0 && final_speed < 25) final_speed = 25;
+
+          // Smooth dead-zone compensation — add offset only when moving,
+          //         avoids hard 0→25 discontinuity that caused chatter at balance point.
+          if (final_speed > 0) final_speed += PWM_DEADZONE;
           if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
-          if (final_speed < MIN_SPEED) final_speed = MIN_SPEED;
+
           drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
 
           HAL_GPIO_WritePin(FLM.directionPort, FLM.directionPin, drive_dir);
@@ -422,6 +438,10 @@ htim8.Init.Period = 255;
 htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 htim8.Init.RepetitionCounter = 0;
 htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+if (HAL_TIMEx_ConfigBreakDeadTime(&htim8, &sBreakDeadTimeConfig) != HAL_OK)
+{
+  Error_Handler();
+}
 if (HAL_TIM_PWM_Init(&htim8) != HAL_OK)
 {
   Error_Handler();
@@ -623,5 +643,3 @@ void assert_failed(uint8_t *file, uint32_t line)
 /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-
