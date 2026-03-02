@@ -132,6 +132,9 @@ HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3); // BRM Timer
 HAL_Delay(1);
 //printf("\nTest Statement\n");
 IMU_Init(&imu, &hi2c2);
+// Initialize theta from accelerometer so complementary filter starts at true angle
+Read_Accel(&imu, &hi2c2);
+theta = atan2(imu.accel.g_z, -imu.accel.g_x);
 /* USER CODE END 2 */
 /* Infinite loop */
 /* USER CODE BEGIN WHILE */
@@ -258,7 +261,7 @@ RCC_OscInitStruct.HSEState = RCC_HSE_ON;
 RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
 RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
 RCC_OscInitStruct.PLL.PLLM = 4;
-RCC_OscInitStruct.PLL.PLLN = 84;
+RCC_OscInitStruct.PLL.PLLN = 168;
 RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
 RCC_OscInitStruct.PLL.PLLQ = 4;
 if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
@@ -271,9 +274,9 @@ RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                             |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
 RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
 RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
 {
   Error_Handler();
 }
@@ -321,7 +324,7 @@ TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 /* USER CODE BEGIN TIM1_Init 1 */
 /* USER CODE END TIM1_Init 1 */
 htim1.Instance = TIM1;
-htim1.Init.Prescaler = 16;
+htim1.Init.Prescaler = 33;
 htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
 htim1.Init.Period = 255;
 htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -432,16 +435,12 @@ TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 /* USER CODE BEGIN TIM8_Init 1 */
 /* USER CODE END TIM8_Init 1 */
 htim8.Instance = TIM8;
-htim8.Init.Prescaler = 16;
+htim8.Init.Prescaler = 33;
 htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
 htim8.Init.Period = 255;
 htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 htim8.Init.RepetitionCounter = 0;
 htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-if (HAL_TIMEx_ConfigBreakDeadTime(&htim8, &sBreakDeadTimeConfig) != HAL_OK)
-{
-  Error_Handler();
-}
 if (HAL_TIM_PWM_Init(&htim8) != HAL_OK)
 {
   Error_Handler();
@@ -497,7 +496,7 @@ __HAL_RCC_GPIOE_CLK_ENABLE();
 __HAL_RCC_GPIOB_CLK_ENABLE();
 __HAL_RCC_GPIOA_CLK_ENABLE();
 /*Configure GPIO pin Output Level */
-HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_14, GPIO_PIN_RESET);
+HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 /*Configure GPIO pin Output Level */
 HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0|Trig2_Pin, GPIO_PIN_RESET);
 /*Configure GPIO pin Output Level */
@@ -540,17 +539,19 @@ GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 HAL_GPIO_Init(Trig3_GPIO_Port, &GPIO_InitStruct);
 /*Configure GPIO pin : Echo3_Pin */
 GPIO_InitStruct.Pin = Echo3_Pin;
-GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
 GPIO_InitStruct.Pull = GPIO_NOPULL;
 HAL_GPIO_Init(Echo3_GPIO_Port, &GPIO_InitStruct);
 /*Configure GPIO pin : Echo2_Pin */
 GPIO_InitStruct.Pin = Echo2_Pin;
-GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
 GPIO_InitStruct.Pull = GPIO_NOPULL;
 HAL_GPIO_Init(Echo2_GPIO_Port, &GPIO_InitStruct);
 /* EXTI interrupt init*/
 HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
 HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 //v6.1
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
