@@ -1,53 +1,73 @@
 /* USER CODE BEGIN Header */
 /**
-******************************************************************************
-* @file           : main.c
-* @brief          : Main program body
-******************************************************************************
-* @attention
-*
-* Copyright (c) 2026 STMicroelectronics.
-* All rights reserved.
-*
-* This software is licensed under terms that can be found in the LICENSE file
-* in the root directory of this software component.
-* If no LICENSE file comes with this software, it is provided AS-IS.
-*
-******************************************************************************
-*/
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <peripherals.h> // Where most peripheral functions are stored
 #include <stdio.h>
 #include <math.h>
 /* USER CODE END Includes */
+
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
 /* USER CODE END PTD */
+
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define MAX_SPEED 256
 #define MIN_SPEED 0
 #define PWM_DEADZONE 25        // Minimum PWM to overcome motor static friction
 /* USER CODE END PD */
+
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+
 /* USER CODE END PM */
+
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c2;
+DMA_HandleTypeDef hdma_i2c2_rx;
+
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
+
 /* USER CODE BEGIN PV */
 // Moustafa's PID Variables
 float dist_m; // Same distance in meters.
 float pos_error; //calculates the position error
-float kp = 1.65232f; // PID_calc from matlab -> |Kp|
-float ki = 0.04117f; // PID_calc from matlab -> |Ki|
-float kd = 3.20583f; // PID_calc from matlab -> |Kd|
+// TUNING GUIDE (tune in this order):
+//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
+//        Too high → robot lurches toward/away from obstacle
+//        Too low  → robot barely reacts to distance changes
+//   kd: add next. Dampens approach speed. Prevents overshoot past target distance.
+//        Too high → robot feels sluggish, won't reach target
+//        Too low  → robot overshoots and bounces back and forth
+//   ki: add LAST, only if robot settles at wrong distance.
+//        Too high → slow hunting oscillation
+//        Too low  → steady-state offset from target
+float kp = 0.10f;   // target_angle ≈ 0.05 rad at 0.5m error (was 1.65)
+float ki = 0.002f;   // very gentle integral (was 0.04)
+float kd = 0.20f;    // moderate damping (was 3.21)
 float target_angle; // Desired angle to return to stabilization.
 int test_speed;
 float target_dist;
@@ -56,8 +76,9 @@ float balance_error;
 float motor_effort;
 int final_speed;
 GPIO_PinState drive_dir;
+
 // Ultrasonic Sensors
-Ultrasonic frontSensor = {
+Ultrasonic rightSensor = {
 		.TriggerPort = 	GPIOA,
 		.EchoPort =		GPIOA,
 		.TriggerPin =	GPIO_PIN_9,
@@ -71,7 +92,7 @@ Ultrasonic leftSensor = {
 		.EchoPin =		GPIO_PIN_9,
 		.timer = 		&htim2
 };
-Ultrasonic rightSensor = {
+Ultrasonic frontSensor = {
 		.TriggerPort = 	GPIOC,
 		.EchoPort =		GPIOC,
 		.TriggerPin =	GPIO_PIN_10,
@@ -86,182 +107,215 @@ Motor BRM = { .PWM = &TIM8->CCR3, .directionPort = GPIOG, .directionPin = GPIO_P
 // IMU
 IMU imu;
 /* USER CODE END PV */
+
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_TIM2_Init(void);
-static void MX_TIM1_Init(void);
-static void MX_TIM8_Init(void);
+static void MX_DMA_Init(void);
 static void MX_I2C2_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 int _write(int32_t file, uint8_t *ptr, int32_t len);
 /* USER CODE END PFP */
+
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
 /* USER CODE END 0 */
+
 /**
-* @brief  The application entry point.
-* @retval int
-*/
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
-/* USER CODE BEGIN 1 */
-/* USER CODE END 1 */
-/* MCU Configuration--------------------------------------------------------*/
-/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-HAL_Init();
-/* USER CODE BEGIN Init */
-/* USER CODE END Init */
-/* Configure the system clock */
-SystemClock_Config();
-/* USER CODE BEGIN SysInit */
-/* USER CODE END SysInit */
-/* Initialize all configured peripherals */
-MX_GPIO_Init();
-MX_TIM2_Init();
-MX_TIM1_Init();
-MX_TIM8_Init();
-MX_I2C2_Init();
-/* USER CODE BEGIN 2 */
-// Starting all necessary timers.
-HAL_TIM_Base_Start(&htim2); // Ultrasonic sensor Timer
-HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1); // FLM Timer
-HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2); // FRM Timer
-HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3); // BLM TImer
-HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3); // BRM Timer
-HAL_Delay(1);
-//printf("\nTest Statement\n");
-IMU_Init(&imu, &hi2c2);
-// Initialize theta from accelerometer so complementary filter starts at true angle
-Read_Accel(&imu, &hi2c2);
-theta = atan2(imu.accel.g_z, -imu.accel.g_x);
-/* USER CODE END 2 */
-/* Infinite loop */
-/* USER CODE BEGIN WHILE */
-// MAIN WHILE LOOP — CONTROL CODE
-int loop_counter = 0;
-const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
-    while (1)
-    {
-          uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
-          // ── Measure real dt for the complementary filter ──
-          static uint32_t prev_time = 0;
-          float dt = (prev_time == 0) ? 0.005f
-                     : (float)(loop_start - prev_time) * 1e-6f;
-          if (dt > 0.05f || dt < 0.001f) dt = 0.005f; // sanity clamp
-          prev_time = loop_start;
+  /* USER CODE BEGIN 1 */
 
-          // ── 1. SENSORS ──
-          Read_Accel(&imu, &hi2c2);
-          Read_Gyro(&imu, &hi2c2);
-          static float filtered_gyro = 0.0f;
-          filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
-          float theta_dot = filtered_gyro * (3.14159f / 180.0f);
-          // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
-          // Negates g_x so atan2(g_z, -g_x) = 0 when balanced.
-          float pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
+  /* USER CODE END 1 */
 
-          // ── Sonar: fire every 10th loop (~50 ms) ──
-          loop_counter++;
-          if (loop_counter >= 10) {
-              frontSensor.distance = getSonarDistance(&frontSensor);
-              loop_counter = 0;
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_I2C2_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_TIM8_Init();
+  /* USER CODE BEGIN 2 */
+  // Starting all necessary timers.
+  HAL_TIM_Base_Start(&htim2); // Ultrasonic sensor Timer
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1); // FLM Timer
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2); // FRM Timer
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3); // BLM TImer
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3); // BRM Timer
+  HAL_Delay(1);
+
+  IMU_Init(&imu, &hi2c2);
+
+  // Initialize theta from accelerometer so complementary filter starts at true angle
+  Read_Accel(&imu, &hi2c2);
+  theta = atan2(imu.accel.g_z, -imu.accel.g_x);
+
+  int loop_counter = 0;
+  int debug_counter = 0;
+  const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
+
+	            // ── Measure real dt for the complementary filter ──
+	            static uint32_t prev_time = 0;
+	            float dt = (prev_time == 0) ? 0.005f
+	                       : (float)(loop_start - prev_time) * 1e-6f;
+	            if (dt > 0.05f || dt < 0.001f) dt = 0.005f; // sanity clamp
+	            prev_time = loop_start;
+
+	            // ── 1. SENSORS ──
+	            Read_Accel(&imu, &hi2c2);
+	            Read_Gyro(&imu, &hi2c2);
+	            static float filtered_gyro = 0.0f;
+	            filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
+	            float theta_dot = filtered_gyro * (3.14159f / 180.0f);
+	            // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
+	            // Negates g_x so atan2(g_z, -g_x) = 0 when balanced.
+	            float pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
+
+	         /*   // ── Sonar: fire every 10th loop (~50 ms) ──
+	            loop_counter++;
+	            if (loop_counter >= 10) {
+	                frontSensor.distance = getSonarDistance(&frontSensor);
+	                loop_counter = 0;
 
 
-              static uint32_t prev_outer_time = 0;
-              float outer_dt = (prev_outer_time == 0) ? 0.05f
-                               : (float)(loop_start - prev_outer_time) * 1e-6f;
-              if (outer_dt > 0.2f || outer_dt < 0.01f) outer_dt = 0.05f; // sanity clamp
-              prev_outer_time = loop_start;
+	                static uint32_t prev_outer_time = 0;
+	                float outer_dt = (prev_outer_time == 0) ? 0.05f
+	                                 : (float)(loop_start - prev_outer_time) * 1e-6f;
+	                if (outer_dt > 0.2f || outer_dt < 0.01f) outer_dt = 0.05f; // sanity clamp
+	                prev_outer_time = loop_start;
 
-              // HC-SR04 valid range: 2–400 cm.  Outside that → no object.
-              if (frontSensor.distance > 2.0f && frontSensor.distance < 400.0f) {
-                  static float filtered_dist = 0.5f;
-                  filtered_dist = 0.7f * filtered_dist + 0.3f * (frontSensor.distance / 100.0f);
-                  dist_m = filtered_dist;
+	                // HC-SR04 valid range: 2–400 cm.  Outside that → no object.
+	                if (frontSensor.distance > 2.0f && frontSensor.distance < 400.0f) {
+	                    static float filtered_dist = 0.5f;
+	                    filtered_dist = 0.7f * filtered_dist + 0.3f * (frontSensor.distance / 100.0f);
+	                    dist_m = filtered_dist;
 
-                  // 4. OUTER PID LOOP
-                  static float pos_integral = 0.0f;
-                  static float pos_prev_error = 0.0f;
-                  static int   pos_first_reading = 1;
-                  pos_error = 0.5f - dist_m;
+	                    // 4. OUTER PID LOOP
+	                    static float pos_integral = 0.0f;
+	                    static float pos_prev_error = 0.0f;
+	                    static int   pos_first_reading = 1;
+	                    pos_error = 0.5f - dist_m;
 
-                  // Fix derivative kick: on first valid reading, seed prev_error
-                  // so the derivative term starts at 0 instead of spiking.
-                  if (pos_first_reading) {
-                      pos_prev_error = pos_error;
-                      pos_first_reading = 0;
-                  }
+	                    // Fix derivative kick: on first valid reading, seed prev_error
+	                    // so the derivative term starts at 0 instead of spiking.
+	                    if (pos_first_reading) {
+	                        pos_prev_error = pos_error;
+	                        pos_first_reading = 0;
+	                    }
 
-                  pos_integral += pos_error * outer_dt;
-                  if (pos_integral >  0.1f) pos_integral =  0.1f;
-                  if (pos_integral < -0.1f) pos_integral = -0.1f;
-                  float pos_derivative = (pos_error - pos_prev_error) / outer_dt;
-                  pos_prev_error = pos_error;
-                  target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
+	                    pos_integral += pos_error * outer_dt;
+	                    if (pos_integral >  0.1f) pos_integral =  0.1f;
+	                    if (pos_integral < -0.1f) pos_integral = -0.1f;
+	                    float pos_derivative = (pos_error - pos_prev_error) / outer_dt;
+	                    pos_prev_error = pos_error;
+	                    target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
 
-                  // Clamp: 0.05 rad ≈ 3 deg — gentle lean, enough for traversal.
-                  // (Simulation showed 0.03 rad works; 0.05 gives real-world margin.)
-                  if (target_angle >  0.05f) target_angle =  0.05f;
-                  if (target_angle < -0.05f) target_angle = -0.05f;
+	                    // Clamp: 0.05 rad ≈ 3 deg — gentle lean, enough for traversal.
+	                    // (Simulation showed 0.03 rad works; 0.05 gives real-world margin.)
+	                    if (target_angle >  0.05f) target_angle =  0.05f;
+	                    if (target_angle < -0.05f) target_angle = -0.05f;
 
-                  // Velocity damping (lesson from simulation): resist fast motion
-                  // to prevent overshoot and oscillation during traversal.
-                  static float prev_dist_m = 0.5f;
-                  float robot_vel = (prev_dist_m - dist_m) / outer_dt; // +ve = toward obstacle
-                  prev_dist_m = dist_m;
-                  const float velocity_damping = 0.10f; // rad per (m/s)
-                  target_angle -= velocity_damping * robot_vel;
+	                    // Velocity damping: resist fast motion
+	                    // to prevent overshoot and oscillation during traversal.
+	                    static float prev_dist_m = 0.5f;
+	                    float robot_vel = (prev_dist_m - dist_m) / outer_dt; // +ve = toward obstacle
+	                    prev_dist_m = dist_m;
+	                    const float velocity_damping = 0.10f; // rad per (m/s)
+	                    target_angle -= velocity_damping * robot_vel;
 
-                  // Re-clamp after damping
-                  if (target_angle >  0.05f) target_angle =  0.05f;
-                  if (target_angle < -0.05f) target_angle = -0.05f;
-              } else {
-                  // No valid obstacle → just balance upright
-                  target_angle = 0.0f;
-              }
-          }
+	                    // Re-clamp after damping
+	                    if (target_angle >  0.05f) target_angle =  0.05f;
+	                    if (target_angle < -0.05f) target_angle = -0.05f;
 
-          // ── 2. COMPLEMENTARY FILTER (uses measured dt) ──
-          theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
+	                } else {
+	                    // No valid obstacle → just balance upright
+	                    target_angle = 0.0f;
+	                    printf("D=NONE,TA=0,TH=%.4f\n", theta);
+	                }
+	            }
+	  */
+	            // ── 2. COMPLEMENTARY FILTER (uses measured dt) ──
+	            theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
 
-          // ── 5. INNER LQR LOOP ──
-          balance_error = theta - target_angle;
+	            // ── 5. INNER LQR LOOP ──
+	            balance_error = theta - target_angle;
 
-          //         (CoM offset, surface slope, asymmetric weight on 4-wheel platform)
-          static float balance_integral = 0.0f;
-          balance_integral += balance_error * dt;
-          if (balance_integral >  0.5f) balance_integral =  0.5f;
-          if (balance_integral < -0.5f) balance_integral = -0.5f;
+	            //         (CoM offset, surface slope, asymmetric weight on 4-wheel platform)
+	            static float balance_integral = 0.0f;
+	            balance_integral += balance_error * dt;
+	            if (balance_integral >  0.5f) balance_integral =  0.5f;
+	            if (balance_integral < -0.5f) balance_integral = -0.5f;
 
-          motor_effort = (26.0041f * balance_error)
-                       + (3.1706f * theta_dot)
-                       + (1.0f * balance_integral);  //integral term — tune 0.5–2.0
+	            motor_effort = (37.501f * balance_error)
+	                         + (4.00f * theta_dot)
+	                         + (1.0f * balance_integral);  //integral term — tune 0.5–2.0
 
-          // ── 6. ACTUATION ──
-          const float PWM_SCALE = 50.0f;
-          final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
+	            // ── 6. ACTUATION ──
+	            const float PWM_SCALE = 50.0f;
+	            final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
 
-          // Smooth dead-zone compensation — add offset only when moving,
-          //         avoids hard 0→25 discontinuity that caused chatter at balance point.
-          if (final_speed > 0) final_speed += PWM_DEADZONE;
-          if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
+	            // Smooth dead-zone compensation — add offset only when moving,
+	            //         avoids hard 0→25 discontinuity that caused chatter at balance point.
+	            if (final_speed > 0) final_speed += PWM_DEADZONE;
+	            if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
 
-          drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+	            drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
 
-          HAL_GPIO_WritePin(FLM.directionPort, FLM.directionPin, drive_dir);
-          HAL_GPIO_WritePin(FRM.directionPort, FRM.directionPin, drive_dir);
-          HAL_GPIO_WritePin(BLM.directionPort, BLM.directionPin, drive_dir);
-          HAL_GPIO_WritePin(BRM.directionPort, BRM.directionPin, drive_dir);
-          TIM1->CCR1 = final_speed;
-          TIM1->CCR2 = final_speed;
-          TIM1->CCR3 = final_speed;
-          TIM8->CCR3 = final_speed;
+	            HAL_GPIO_WritePin(FLM.directionPort, FLM.directionPin, drive_dir);
+	            HAL_GPIO_WritePin(FRM.directionPort, FRM.directionPin, drive_dir);
+	            HAL_GPIO_WritePin(BLM.directionPort, BLM.directionPin, drive_dir);
+	            HAL_GPIO_WritePin(BRM.directionPort, BRM.directionPin, drive_dir);
+	            TIM1->CCR1 = final_speed;
+	            TIM1->CCR2 = final_speed;
+	            TIM1->CCR3 = final_speed;
+	            TIM8->CCR3 = final_speed;
+	             // DEBUG: print every 20th loop (~10 Hz) to avoid flooding ──
+	                     debug_counter++;
+	                     if (debug_counter >= 20) {
+	                         debug_counter = 0;
+	                         printf("TH=%.4f,TD=%.4f,ME=%.2f,PWM=%d,DIR=%d\n",
+	                                theta, theta_dot, motor_effort, final_speed,
+	                                (int)drive_dir);
+	                     }
 
-          // ── Spin-wait for precise loop period (replaces HAL_Delay) ──
-          while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
-    }
+	            // ── Spin-wait for precise loop period ──
+	            while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
+  }
+  /* USER CODE END 3 */
 }
 
 /**
@@ -281,11 +335,12 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 4;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 4;
@@ -318,9 +373,11 @@ static void MX_I2C2_Init(void)
 {
 
   /* USER CODE BEGIN I2C2_Init 0 */
+
   /* USER CODE END I2C2_Init 0 */
 
   /* USER CODE BEGIN I2C2_Init 1 */
+
   /* USER CODE END I2C2_Init 1 */
   hi2c2.Instance = I2C2;
   hi2c2.Init.ClockSpeed = 100000;
@@ -336,6 +393,7 @@ static void MX_I2C2_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN I2C2_Init 2 */
+
   /* USER CODE END I2C2_Init 2 */
 
 }
@@ -349,6 +407,7 @@ static void MX_TIM1_Init(void)
 {
 
   /* USER CODE BEGIN TIM1_Init 0 */
+
   /* USER CODE END TIM1_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
@@ -357,9 +416,10 @@ static void MX_TIM1_Init(void)
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
+
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 16;
+  htim1.Init.Prescaler = 31;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim1.Init.Period = 255;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -415,6 +475,7 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
+
   /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);
 
@@ -429,15 +490,17 @@ static void MX_TIM2_Init(void)
 {
 
   /* USER CODE BEGIN TIM2_Init 0 */
+
   /* USER CODE END TIM2_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
 
   /* USER CODE BEGIN TIM2_Init 1 */
+
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 83;
+  htim2.Init.Prescaler = 167;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -458,6 +521,7 @@ static void MX_TIM2_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM2_Init 2 */
+
   /* USER CODE END TIM2_Init 2 */
 
 }
@@ -471,21 +535,33 @@ static void MX_TIM8_Init(void)
 {
 
   /* USER CODE BEGIN TIM8_Init 0 */
+
   /* USER CODE END TIM8_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM8_Init 1 */
+
   /* USER CODE END TIM8_Init 1 */
   htim8.Instance = TIM8;
-  htim8.Init.Prescaler = 16;
+  htim8.Init.Prescaler = 31;
   htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim8.Init.Period = 255;
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim8, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim8) != HAL_OK)
   {
     Error_Handler();
@@ -519,8 +595,25 @@ static void MX_TIM8_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM8_Init 2 */
+
   /* USER CODE END TIM8_Init 2 */
   HAL_TIM_MspPostInit(&htim8);
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
 
 }
 
@@ -533,16 +626,16 @@ static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
+
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
@@ -554,7 +647,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(Trig1_GPIO_Port, Trig1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(Trig3_GPIO_Port, Trig3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Trig_Front_GPIO_Port, Trig_Front_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PF13 PF14 PF15 */
   GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
@@ -579,42 +672,40 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : Echo1_Pin */
   GPIO_InitStruct.Pin = Echo1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Echo1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Trig3_Pin */
-  GPIO_InitStruct.Pin = Trig3_Pin;
+  /*Configure GPIO pin : Trig_Front_Pin */
+  GPIO_InitStruct.Pin = Trig_Front_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(Trig3_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(Trig_Front_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Echo3_Pin (PC11) — needs RISING_FALLING for echo timing */
-  GPIO_InitStruct.Pin = Echo3_Pin;
+  /*Configure GPIO pin : Echo_Front_Pin */
+  GPIO_InitStruct.Pin = Echo_Front_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(Echo3_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(Echo_Front_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Echo2_Pin (PG9) — needs RISING_FALLING for echo timing */
+  /*Configure GPIO pin : Echo2_Pin */
   GPIO_InitStruct.Pin = Echo2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Echo2_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-  /* Echo2 (PG9) is on EXTI line 9 → needs EXTI9_5 IRQ enabled */
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 2, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+
 // External interrupt handler
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
@@ -653,8 +744,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		}
 	}
 }
-/*printf config function*/
-/* USER CODE BEGIN 4 */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -678,11 +768,11 @@ int _write(int file, uint8_t *ptr, int len)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-/* User can add his own implementation to report the HAL error return state */
-__disable_irq();
-while (1)
-{
-}
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
@@ -696,8 +786,8 @@ while (1)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-/* User can add his own implementation to report the file name and line number,
-   ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

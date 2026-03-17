@@ -64,11 +64,11 @@ void Error_Handler(void);
 #define Echo1_Pin GPIO_PIN_10
 #define Echo1_GPIO_Port GPIOA
 #define Echo1_EXTI_IRQn EXTI15_10_IRQn
-#define Trig3_Pin GPIO_PIN_10
-#define Trig3_GPIO_Port GPIOC
-#define Echo3_Pin GPIO_PIN_11
-#define Echo3_GPIO_Port GPIOC
-#define Echo3_EXTI_IRQn EXTI15_10_IRQn
+#define Trig_Front_Pin GPIO_PIN_10
+#define Trig_Front_GPIO_Port GPIOC
+#define Echo_Front_Pin GPIO_PIN_11
+#define Echo_Front_GPIO_Port GPIOC
+#define Echo_Front_EXTI_IRQn EXTI15_10_IRQn
 #define Echo2_Pin GPIO_PIN_9
 #define Echo2_GPIO_Port GPIOG
 #define Trig2_Pin GPIO_PIN_14
