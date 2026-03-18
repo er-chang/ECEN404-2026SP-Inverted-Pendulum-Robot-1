@@ -205,9 +205,16 @@ int main(void)
 
   IMU_Init(&imu, &hi2c2);
 
-  // Initialize theta from accelerometer so complementary filter starts at true angle
-  Read_IMU(&imu, &hi2c2);  // blocking read for initial value
-  theta = atan2(imu.accel.g_z, -imu.accel.g_x);
+  // Initialize theta from accelerometer — retry up to 5 times
+  theta = 0.0f;
+  for (int attempt = 0; attempt < 5; attempt++) {
+      Read_IMU(&imu, &hi2c2);
+      if (imu.status == HAL_OK) {
+          theta = atan2(imu.accel.g_z, -imu.accel.g_x);
+          break;
+      }
+      HAL_Delay(10);
+  }
 
   // Kick off first DMA read before entering the loop
   Start_IMU_DMA(&imu, &hi2c2);
@@ -232,15 +239,17 @@ int main(void)
 	            if (dt > 0.05f || dt < 0.001f) dt = 0.005f; // sanity clamp
 	            prev_time = loop_start;
 
-	            // ── 1. SENSORS (DMA — non-blocking) ──
-	            // DMA transfer was started at end of previous loop (or before loop entry).
-	            // If complete, process the raw data and kick off the next read.
+	            // ── 1. SENSORS (DMA with blocking fallback) ──
 	            uint8_t got_fresh_imu = 0;
 	            if (imu_dma_ready) {
 	                imu_dma_ready = 0;
 	                Process_IMU_Data(&imu);
-	                Start_IMU_DMA(&imu, &hi2c2); // start next transfer immediately
+	                Start_IMU_DMA(&imu, &hi2c2);
 	                got_fresh_imu = 1;
+	            } else {
+	                // DMA not ready — fall back to blocking read so we never run stale
+	                Read_IMU(&imu, &hi2c2);
+	                got_fresh_imu = 2; // 2 = fallback blocking read
 	            }
 	            filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
 	            theta_dot = filtered_gyro * (PI_OVER_180);
