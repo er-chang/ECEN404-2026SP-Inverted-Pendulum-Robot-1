@@ -36,6 +36,27 @@
 #define MAX_SPEED 256
 #define MIN_SPEED 0
 #define PWM_DEADZONE 25        // Minimum PWM to overcome motor static friction
+
+// ── DATA LOGGER ──
+// Logs to RAM during test, auto-dumps CSV after robot falls.
+// ~32 bytes per entry, logged every 10th loop (20 Hz).
+// 3000 entries = 150 seconds of recording, ~96 KB RAM usage.
+#define LOG_MAX_ENTRIES 3000
+#define LOG_EVERY_N_LOOPS 10
+#define FALL_THRESHOLD 0.7f     // rad — if |theta| exceeds this, robot has fallen
+#define FALL_CONFIRM_LOOPS 40   // 40 loops at 200Hz = 200ms sustained fall = confirmed
+
+typedef struct {
+    uint32_t timestamp_us;  // microseconds since boot (from TIM2)
+    float theta;            // pitch angle (rad)
+    float theta_dot;        // angular velocity (rad/s)
+    float target_angle;     // outer loop command (rad)
+    float motor_effort;     // inner loop output
+    float dist_m;           // filtered sonar distance (m)
+    int16_t pwm;            // actual PWM sent to motors
+    uint8_t dir;            // motor direction (0 or 1)
+    uint8_t dma_fresh;      // 1 if IMU data was fresh this iteration
+} LogEntry;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -84,6 +105,12 @@ Motor BLM = { .PWM = &TIM1->CCR3, .directionPort = GPIOF, .directionPin = GPIO_P
 Motor BRM = { .PWM = &TIM8->CCR3, .directionPort = GPIOG, .directionPin = GPIO_PIN_0 }; // Back Right Motor
 // IMU
 IMU imu;
+volatile uint8_t imu_dma_ready = 0; // Set by DMA complete callback
+
+// Data logger
+LogEntry log_buffer[LOG_MAX_ENTRIES];
+volatile uint32_t log_count = 0;
+volatile uint8_t log_active = 1;     // 1 = recording, 0 = done
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -112,7 +139,7 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 	// Moustafa's PID Variables
-	float dist_m; // Same distance in meters.
+	float dist_m = 0.0f; // Same distance in meters.
 	float pos_error; //calculates the position error
 	// TUNING GUIDE (tune in this order):
 	//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
@@ -179,8 +206,11 @@ int main(void)
   IMU_Init(&imu, &hi2c2);
 
   // Initialize theta from accelerometer so complementary filter starts at true angle
-  Read_Accel(&imu, &hi2c2);
+  Read_IMU(&imu, &hi2c2);  // blocking read for initial value
   theta = atan2(imu.accel.g_z, -imu.accel.g_x);
+
+  // Kick off first DMA read before entering the loop
+  Start_IMU_DMA(&imu, &hi2c2);
 
   int loop_counter = 0;
   int debug_counter = 0;
@@ -197,15 +227,21 @@ int main(void)
 	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
 	            // ── Measure real dt for the complementary filter ──
-	            prev_time = 0;
 	            dt = (prev_time == 0) ? 0.005f
 	                       : (float)(loop_start - prev_time) * 1e-6f;
 	            if (dt > 0.05f || dt < 0.001f) dt = 0.005f; // sanity clamp
 	            prev_time = loop_start;
 
-	            // ── 1. SENSORS ──
-	            Read_IMU(&imu, &hi2c2);
-	            filtered_gyro = 0.0f;
+	            // ── 1. SENSORS (DMA — non-blocking) ──
+	            // DMA transfer was started at end of previous loop (or before loop entry).
+	            // If complete, process the raw data and kick off the next read.
+	            uint8_t got_fresh_imu = 0;
+	            if (imu_dma_ready) {
+	                imu_dma_ready = 0;
+	                Process_IMU_Data(&imu);
+	                Start_IMU_DMA(&imu, &hi2c2); // start next transfer immediately
+	                got_fresh_imu = 1;
+	            }
 	            filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
 	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
@@ -282,14 +318,13 @@ int main(void)
 	            balance_error = theta - target_angle;
 
 	            //         (CoM offset, surface slope, asymmetric weight on 4-wheel platform)
-	            balance_integral = 0.0f;
 	            balance_integral += balance_error * dt;
 	            if (balance_integral >  0.5f) balance_integral =  0.5f;
 	            if (balance_integral < -0.5f) balance_integral = -0.5f;
 
 	            motor_effort = (35.501f * balance_error)
 	                         + (5.00f * theta_dot)
-	                         + (1.0f * balance_integral);  //integral term — tune 0.5–2.0
+	                         + (0.0f * balance_integral);  //integral term — tune 0.5–2.0
 
 	            // ── 6. ACTUATION ──
 	            final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
@@ -309,16 +344,58 @@ int main(void)
 	            TIM1->CCR2 = final_speed;
 	            TIM1->CCR3 = final_speed;
 	            TIM8->CCR3 = final_speed;
-#if true
-	             // DEBUG: print every 20th loop (~10 Hz) to avoid flooding ──
-	                     debug_counter++;
-	                     if (debug_counter >= 20) {
-	                         debug_counter = 0;
-	                         printf("TH=%.4f,TD=%.4f,ME=%.2f,PWM=%d,DIR=%d\n",
-	                                theta, theta_dot, motor_effort, final_speed,
-	                                (int)drive_dir);
-	                     }
-#endif
+	            // ── DATA LOGGER: record every Nth loop ──
+	            debug_counter++;
+	            if (log_active && debug_counter >= LOG_EVERY_N_LOOPS) {
+	                debug_counter = 0;
+	                if (log_count < LOG_MAX_ENTRIES) {
+	                    LogEntry *e = &log_buffer[log_count];
+	                    e->timestamp_us = __HAL_TIM_GET_COUNTER(&htim2);
+	                    e->theta        = theta;
+	                    e->theta_dot    = theta_dot;
+	                    e->target_angle = target_angle;
+	                    e->motor_effort = motor_effort;
+	                    e->dist_m       = dist_m;
+	                    e->pwm          = (int16_t)final_speed;
+	                    e->dir          = (uint8_t)drive_dir;
+	                    e->dma_fresh    = got_fresh_imu;
+	                    log_count++;
+	                }
+	            }
+
+	            // ── FALL DETECTION ──
+	            static uint32_t fall_counter = 0;
+	            if (fabs(theta) > FALL_THRESHOLD) {
+	                fall_counter++;
+	            } else {
+	                fall_counter = 0;
+	            }
+
+	            // Robot has fallen — stop motors, dump CSV, halt
+	            if (fall_counter >= FALL_CONFIRM_LOOPS || log_count >= LOG_MAX_ENTRIES) {
+	                // Stop all motors immediately
+	                TIM1->CCR1 = 0; TIM1->CCR2 = 0; TIM1->CCR3 = 0; TIM8->CCR3 = 0;
+	                log_active = 0;
+
+	                // Dump CSV header + data via printf (SWV/ITM)
+	                // Connect debugger after fall, open SWV viewer, press reset
+	                // to see this output. Or use HAL_Delay to give time to reconnect.
+	                HAL_Delay(3000); // 3s grace period to reconnect SWV
+	                printf("time_us,theta,theta_dot,target_angle,motor_effort,dist_m,pwm,dir,dma_fresh\n");
+	                for (uint32_t i = 0; i < log_count; i++) {
+	                    LogEntry *e = &log_buffer[i];
+	                    printf("%lu,%.5f,%.5f,%.5f,%.3f,%.3f,%d,%d,%d\n",
+	                           (unsigned long)e->timestamp_us,
+	                           e->theta, e->theta_dot, e->target_angle,
+	                           e->motor_effort, e->dist_m,
+	                           (int)e->pwm, (int)e->dir, (int)e->dma_fresh);
+	                }
+	                printf("END,%lu entries\n", (unsigned long)log_count);
+
+	                // Halt — do nothing forever
+	                while (1) {}
+	            }
+
 	            // ── Spin-wait for precise loop period ──
 	            while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
   }
@@ -712,6 +789,14 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+// DMA complete callback — called by HAL when I2C2 DMA read finishes
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+    if (hi2c->Instance == I2C2) {
+        imu_dma_ready = 1;
+    }
+}
 
 // External interrupt handler
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
