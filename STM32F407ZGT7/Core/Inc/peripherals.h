@@ -1,5 +1,8 @@
+#ifndef PERIPHERALS_H
+#define PERIPHERALS_H
 
 /*Includes*/
+#include "main.h"
 #include <stdio.h>
 /*End Includes*/
 
@@ -149,7 +152,7 @@ void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
 }
 
 
-/*READ IMU - Reads Both Gyro and Accel Values from IMU*/
+/*READ IMU - Reads Both Gyro and Accel Values from IMU (BLOCKING)*/
 void Read_IMU(IMU* imu, I2C_HandleTypeDef* i2c) {
     // Start reading from the first Gyro register (0x22)
     // The LSM6DSOX auto-increments through to the Accel registers
@@ -161,6 +164,24 @@ void Read_IMU(IMU* imu, I2C_HandleTypeDef* i2c) {
     imu->gyro.dps_z = (float)((int16_t)((imu->data[5] << 8) | imu->data[4])) * 0.00875f;
 
     // --- Process Accel (Next 6 bytes) ---
+    imu->accel.g_x = (float)((int16_t)((imu->data[7] << 8) | imu->data[6])) * 0.000061f;
+    imu->accel.g_y = (float)((int16_t)((imu->data[9] << 8) | imu->data[8])) * 0.000061f;
+    imu->accel.g_z = (float)((int16_t)((imu->data[11] << 8) | imu->data[10])) * 0.000061f;
+}
+
+/*START IMU DMA - Kicks off a non-blocking 12-byte I2C DMA read into imu->data*/
+HAL_StatusTypeDef Start_IMU_DMA(IMU* imu, I2C_HandleTypeDef* i2c) {
+    return HAL_I2C_Mem_Read_DMA(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->data, 12);
+}
+
+/*PROCESS IMU DATA - Converts raw bytes in imu->data to float values (call after DMA completes)*/
+void Process_IMU_Data(IMU* imu) {
+    // --- Gyro (First 6 bytes) ---
+    imu->gyro.dps_x = (float)((int16_t)((imu->data[1] << 8) | imu->data[0])) * 0.00875f;
+    imu->gyro.dps_y = (float)((int16_t)((imu->data[3] << 8) | imu->data[2])) * 0.00875f;
+    imu->gyro.dps_z = (float)((int16_t)((imu->data[5] << 8) | imu->data[4])) * 0.00875f;
+
+    // --- Accel (Next 6 bytes) ---
     imu->accel.g_x = (float)((int16_t)((imu->data[7] << 8) | imu->data[6])) * 0.000061f;
     imu->accel.g_y = (float)((int16_t)((imu->data[9] << 8) | imu->data[8])) * 0.000061f;
     imu->accel.g_z = (float)((int16_t)((imu->data[11] << 8) | imu->data[10])) * 0.000061f;
@@ -242,8 +263,6 @@ void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){
 }
 /* End IMU INIT FUNCTION*/
 
-
-
-
+#endif /* PERIPHERALS_H */
 
 
