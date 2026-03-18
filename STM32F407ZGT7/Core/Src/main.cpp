@@ -52,30 +52,8 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
-// Moustafa's PID Variables
-float dist_m; // Same distance in meters.
-float pos_error; //calculates the position error
-// TUNING GUIDE (tune in this order):
-//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
-//        Too high → robot lurches toward/away from obstacle
-//        Too low  → robot barely reacts to distance changes
-//   kd: add next. Dampens approach speed. Prevents overshoot past target distance.
-//        Too high → robot feels sluggish, won't reach target
-//        Too low  → robot overshoots and bounces back and forth
-//   ki: add LAST, only if robot settles at wrong distance.
-//        Too high → slow hunting oscillation
-//        Too low  → steady-state offset from target
-float kp = 0.10f;   // target_angle ≈ 0.05 rad at 0.5m error (was 1.65)
-float ki = 0.002f;   // very gentle integral (was 0.04)
-float kd = 0.20f;    // moderate damping (was 3.21)
-float target_angle; // Desired angle to return to stabilization.
-int test_speed;
-float target_dist;
-static float theta;
-float balance_error;
-float motor_effort;
-int final_speed;
-GPIO_PinState drive_dir;
+static const float PI_OVER_180 = 3.14159f / 180.0f;
+static const float PWM_SCALE = 50.0f;
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -133,7 +111,37 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	// Moustafa's PID Variables
+	float dist_m; // Same distance in meters.
+	float pos_error; //calculates the position error
+	// TUNING GUIDE (tune in this order):
+	//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
+	//        Too high → robot lurches toward/away from obstacle
+	//        Too low  → robot barely reacts to distance changes
+	//   kd: add next. Dampens approach speed. Prevents overshoot past target distance.
+	//        Too high → robot feels sluggish, won't reach target
+	//        Too low  → robot overshoots and bounces back and forth
+	//   ki: add LAST, only if robot settles at wrong distance.
+	//        Too high → slow hunting oscillation
+	//        Too low  → steady-state offset from target
+	float kp = 0.10f;   // target_angle ≈ 0.05 rad at 0.5m error (was 1.65)
+	float ki = 0.002f;   // very gentle integral (was 0.04)
+	float kd = 0.20f;    // moderate damping (was 3.21)
+	float target_angle = 0.0f; // Desired angle to return to stabilization.
+	int test_speed;
+	float target_dist;
+	static float theta;
+	float balance_error;
+	float motor_effort;
+	int final_speed;
+	GPIO_PinState drive_dir;
 
+	static uint32_t prev_time;
+	float dt;
+	static float filtered_gyro;
+	float theta_dot;
+	float pitch_accel;
+	static float balance_integral;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -189,21 +197,20 @@ int main(void)
 	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
 	            // ── Measure real dt for the complementary filter ──
-	            static uint32_t prev_time = 0;
-	            float dt = (prev_time == 0) ? 0.005f
+	            prev_time = 0;
+	            dt = (prev_time == 0) ? 0.005f
 	                       : (float)(loop_start - prev_time) * 1e-6f;
 	            if (dt > 0.05f || dt < 0.001f) dt = 0.005f; // sanity clamp
 	            prev_time = loop_start;
 
 	            // ── 1. SENSORS ──
-	            Read_Accel(&imu, &hi2c2);
-	            Read_Gyro(&imu, &hi2c2);
-	            static float filtered_gyro = 0.0f;
+	            Read_IMU(&imu, &hi2c2);
+	            filtered_gyro = 0.0f;
 	            filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
-	            float theta_dot = filtered_gyro * (3.14159f / 180.0f);
+	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
 	            // Negates g_x so atan2(g_z, -g_x) = 0 when balanced.
-	            float pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
+	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
 	         /*   // ── Sonar: fire every 10th loop (~50 ms) ──
 	            loop_counter++;
@@ -275,17 +282,16 @@ int main(void)
 	            balance_error = theta - target_angle;
 
 	            //         (CoM offset, surface slope, asymmetric weight on 4-wheel platform)
-	            static float balance_integral = 0.0f;
+	            balance_integral = 0.0f;
 	            balance_integral += balance_error * dt;
 	            if (balance_integral >  0.5f) balance_integral =  0.5f;
 	            if (balance_integral < -0.5f) balance_integral = -0.5f;
 
-	            motor_effort = (37.501f * balance_error)
-	                         + (4.00f * theta_dot)
+	            motor_effort = (35.501f * balance_error)
+	                         + (5.00f * theta_dot)
 	                         + (1.0f * balance_integral);  //integral term — tune 0.5–2.0
 
 	            // ── 6. ACTUATION ──
-	            const float PWM_SCALE = 50.0f;
 	            final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
 
 	            // Smooth dead-zone compensation — add offset only when moving,
@@ -303,6 +309,7 @@ int main(void)
 	            TIM1->CCR2 = final_speed;
 	            TIM1->CCR3 = final_speed;
 	            TIM8->CCR3 = final_speed;
+#if true
 	             // DEBUG: print every 20th loop (~10 Hz) to avoid flooding ──
 	                     debug_counter++;
 	                     if (debug_counter >= 20) {
@@ -311,7 +318,7 @@ int main(void)
 	                                theta, theta_dot, motor_effort, final_speed,
 	                                (int)drive_dir);
 	                     }
-
+#endif
 	            // ── Spin-wait for precise loop period ──
 	            while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
   }
@@ -320,7 +327,6 @@ int main(void)
 
 /**
   * @brief System Clock Configuration
-  * @retval None
   */
 void SystemClock_Config(void)
 {

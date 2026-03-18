@@ -74,6 +74,7 @@ typedef struct IMU{
 	uint16_t 			who_am_i_value {WHO_AM_I_VALUE};
 	uint8_t				who_am_i_data[1] {0};
 	uint8_t				init_buffer[1] {0};
+	uint8_t				data[12];
 	HAL_StatusTypeDef	status {HAL_OK};
 	Accelerometer 		accel;
 	Gyroscope			gyro;
@@ -145,6 +146,24 @@ void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
    imu->gyro.dps_x = (float)x * 8.75f / 1000.0f;
    imu->gyro.dps_y = (float)y * 8.75f / 1000.0f;
    imu->gyro.dps_z = (float)z * 8.75f / 1000.0f;
+}
+
+
+/*READ IMU - Reads Both Gyro and Accel Values from IMU*/
+void Read_IMU(IMU* imu, I2C_HandleTypeDef* i2c) {
+    // Start reading from the first Gyro register (0x22)
+    // The LSM6DSOX auto-increments through to the Accel registers
+    imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->data, 12, 10);
+
+    // --- Process Gyro (First 6 bytes) ---
+    imu->gyro.dps_x = (float)((int16_t)((imu->data[1] << 8) | imu->data[0])) * 0.00875f;
+    imu->gyro.dps_y = (float)((int16_t)((imu->data[3] << 8) | imu->data[2])) * 0.00875f;
+    imu->gyro.dps_z = (float)((int16_t)((imu->data[5] << 8) | imu->data[4])) * 0.00875f;
+
+    // --- Process Accel (Next 6 bytes) ---
+    imu->accel.g_x = (float)((int16_t)((imu->data[7] << 8) | imu->data[6])) * 0.000061f;
+    imu->accel.g_y = (float)((int16_t)((imu->data[9] << 8) | imu->data[8])) * 0.000061f;
+    imu->accel.g_z = (float)((int16_t)((imu->data[11] << 8) | imu->data[10])) * 0.000061f;
 }
 
 
