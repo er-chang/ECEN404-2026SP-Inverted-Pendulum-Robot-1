@@ -790,6 +790,10 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // DMA complete callback — called by HAL when I2C2 DMA read finishes
 void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
@@ -837,9 +841,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 }
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 int _write(int file, uint8_t *ptr, int len)
 {
   for (int i = 0; i < len; i++)
@@ -848,6 +849,7 @@ int _write(int file, uint8_t *ptr, int len)
   }
   return len;
 }
+
 #ifdef __cplusplus
 }
 #endif
