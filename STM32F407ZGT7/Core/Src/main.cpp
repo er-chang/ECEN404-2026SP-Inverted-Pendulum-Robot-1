@@ -36,21 +36,6 @@
 #define MAX_SPEED 256
 #define MIN_SPEED 0
 #define PWM_DEADZONE 25        // Minimum PWM to overcome motor static friction
-
-// Data logger
-#define LOG_MAX_ENTRIES 3000
-#define LOG_EVERY_N_LOOPS 10
-#define FALL_THRESHOLD 0.7f
-#define FALL_CONFIRM_LOOPS 40
-
-typedef struct {
-    uint32_t timestamp_us;
-    float theta;
-    float theta_dot;
-    float motor_effort;
-    int16_t pwm;
-    uint8_t dir;
-} LogEntry;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -100,10 +85,6 @@ Motor BRM = { .PWM = &TIM8->CCR3, .directionPort = GPIOG, .directionPin = GPIO_P
 // IMU
 IMU imu;
 volatile uint8_t imu_dma_ready = 0; // Set by DMA complete callback
-
-LogEntry log_buffer[LOG_MAX_ENTRIES];
-volatile uint32_t log_count = 0;
-volatile uint8_t log_active = 1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -334,41 +315,13 @@ int main(void)
 	            TIM1->CCR3 = final_speed;
 	            TIM8->CCR3 = final_speed;
 
-	            // ── DATA LOGGER ──
+	            // ── LIVE DEBUG (every 10th loop = ~20 Hz over UART) ──
 	            debug_counter++;
-	            if (log_active && debug_counter >= LOG_EVERY_N_LOOPS) {
+	            if (debug_counter >= 10) {
 	                debug_counter = 0;
-	                if (log_count < LOG_MAX_ENTRIES) {
-	                    LogEntry *e = &log_buffer[log_count];
-	                    e->timestamp_us = __HAL_TIM_GET_COUNTER(&htim2);
-	                    e->theta        = theta;
-	                    e->theta_dot    = theta_dot;
-	                    e->motor_effort = motor_effort;
-	                    e->pwm          = (int16_t)final_speed;
-	                    e->dir          = (uint8_t)drive_dir;
-	                    log_count++;
-	                }
-	            }
-
-	            // ── FALL DETECTION ──
-	            static uint32_t fall_counter = 0;
-	            if (fabs(theta) > FALL_THRESHOLD) fall_counter++;
-	            else fall_counter = 0;
-
-	            if (fall_counter >= FALL_CONFIRM_LOOPS || log_count >= LOG_MAX_ENTRIES) {
-	                TIM1->CCR1 = 0; TIM1->CCR2 = 0; TIM1->CCR3 = 0; TIM8->CCR3 = 0;
-	                log_active = 0;
-	                HAL_Delay(5000);
-	                printf("time_us,theta,theta_dot,motor_effort,pwm,dir\n");
-	                for (uint32_t i = 0; i < log_count; i++) {
-	                    LogEntry *e = &log_buffer[i];
-	                    printf("%lu,%.5f,%.5f,%.3f,%d,%d\n",
-	                           (unsigned long)e->timestamp_us,
-	                           e->theta, e->theta_dot, e->motor_effort,
-	                           (int)e->pwm, (int)e->dir);
-	                }
-	                printf("END,%lu\n", (unsigned long)log_count);
-	                while (1) {}
+	                printf("%.4f,%.4f,%.2f,%d,%d\n",
+	                       theta, theta_dot, motor_effort,
+	                       final_speed, (int)drive_dir);
 	            }
 
 	            // ── Spin-wait for precise loop period ──
