@@ -125,7 +125,7 @@ int main(void)
 	//   ki: add LAST, only if robot settles at wrong distance.
 	//        Too high → slow hunting oscillation
 	//        Too low  → steady-state offset from target
-	float kp = 0.10f;   // target_angle ≈ 0.05 rad at 0.5m error
+	float kp = 0.03f;   // gentler — 0.5m error → 0.015 rad lean
 	float ki = 0.0f;     // off for now — add once position hold works
 	float kd = 0.0f;     // off for now — sonar too noisy for derivative
 	float target_angle = 0.0f; // Desired angle to return to stabilization.
@@ -219,8 +219,11 @@ int main(void)
 	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
 	            // ── Sonar: fire every 10th loop (~50 ms) ──
+	            // Skip outer loop for first 400 loops (2 sec) so inner loop stabilizes
+	            static uint32_t total_loops = 0;
+	            total_loops++;
 	            loop_counter++;
-	            if (loop_counter >= 10) {
+	            if (loop_counter >= 10 && total_loops > 400) {
 	                getSonarDistance(&frontSensor);
 	                loop_counter = 0;
 
