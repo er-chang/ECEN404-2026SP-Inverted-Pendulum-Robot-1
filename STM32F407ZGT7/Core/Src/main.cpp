@@ -53,7 +53,7 @@ TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 static const float PI_OVER_180 = 3.14159f / 180.0f;
-static const float PWM_SCALE = 50.0f;
+static const float PWM_SCALE = 35.0f;
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -212,23 +212,22 @@ int main(void)
 
 	            // ── 1. READ IMU (blocking) ──
 	            Read_IMU(&imu, &hi2c2);
-	            filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
+	            filtered_gyro = 0.9f * filtered_gyro + 0.1f * imu.gyro.dps_y;
 	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
 	            // Negates g_x so atan2(g_z, -g_x) = 0 when balanced.
 	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
-	         /*   // ── Sonar: fire every 10th loop (~50 ms) ──
+	            // ── Sonar: fire every 10th loop (~50 ms) ──
 	            loop_counter++;
 	            if (loop_counter >= 10) {
-	                frontSensor.distance = getSonarDistance(&frontSensor);
+	                getSonarDistance(&frontSensor);
 	                loop_counter = 0;
-
 
 	                static uint32_t prev_outer_time = 0;
 	                float outer_dt = (prev_outer_time == 0) ? 0.05f
 	                                 : (float)(loop_start - prev_outer_time) * 1e-6f;
-	                if (outer_dt > 0.2f || outer_dt < 0.01f) outer_dt = 0.05f; // sanity clamp
+	                if (outer_dt > 0.2f || outer_dt < 0.01f) outer_dt = 0.05f;
 	                prev_outer_time = loop_start;
 
 	                // HC-SR04 valid range: 2–400 cm.  Outside that → no object.
@@ -237,14 +236,12 @@ int main(void)
 	                    filtered_dist = 0.7f * filtered_dist + 0.3f * (frontSensor.distance / 100.0f);
 	                    dist_m = filtered_dist;
 
-	                    // 4. OUTER PID LOOP
+	                    // OUTER PID LOOP
 	                    static float pos_integral = 0.0f;
 	                    static float pos_prev_error = 0.0f;
 	                    static int   pos_first_reading = 1;
 	                    pos_error = 0.5f - dist_m;
 
-	                    // Fix derivative kick: on first valid reading, seed prev_error
-	                    // so the derivative term starts at 0 instead of spiking.
 	                    if (pos_first_reading) {
 	                        pos_prev_error = pos_error;
 	                        pos_first_reading = 0;
@@ -257,30 +254,20 @@ int main(void)
 	                    pos_prev_error = pos_error;
 	                    target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
 
-	                    // Clamp: 0.05 rad ≈ 3 deg — gentle lean, enough for traversal.
-	                    // (Simulation showed 0.03 rad works; 0.05 gives real-world margin.)
 	                    if (target_angle >  0.05f) target_angle =  0.05f;
 	                    if (target_angle < -0.05f) target_angle = -0.05f;
 
-	                    // Velocity damping: resist fast motion
-	                    // to prevent overshoot and oscillation during traversal.
+	                    // Velocity damping
 	                    static float prev_dist_m = 0.5f;
-	                    float robot_vel = (prev_dist_m - dist_m) / outer_dt; // +ve = toward obstacle
+	                    float robot_vel = (prev_dist_m - dist_m) / outer_dt;
 	                    prev_dist_m = dist_m;
-	                    const float velocity_damping = 0.10f; // rad per (m/s)
+	                    const float velocity_damping = 0.10f;
 	                    target_angle -= velocity_damping * robot_vel;
 
-	                    // Re-clamp after damping
 	                    if (target_angle >  0.05f) target_angle =  0.05f;
 	                    if (target_angle < -0.05f) target_angle = -0.05f;
-
-	                } else {
-	                    // No valid obstacle → just balance upright
-	                    target_angle = 0.0f;
-	                    printf("D=NONE,TA=0,TH=%.4f\n", theta);
 	                }
 	            }
-	  */
 	            // ── 2. COMPLEMENTARY FILTER (uses measured dt) ──
 	            theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
 
@@ -293,8 +280,8 @@ int main(void)
 	            if (balance_integral < -0.5f) balance_integral = -0.5f;
 
 	            motor_effort = (35.501f * balance_error)
-	                         + (5.00f * theta_dot)
-	                         + (0.0f * balance_integral);  //integral term — tune 0.5–2.0
+	                         + (12.0f * theta_dot)
+	                         + (0.0f * balance_integral);
 
 	            // ── 6. ACTUATION ──
 	            final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
@@ -319,9 +306,9 @@ int main(void)
 	            debug_counter++;
 	            if (debug_counter >= 10) {
 	                debug_counter = 0;
-	                printf("%.4f,%.4f,%.2f,%d,%d\n",
+	                printf("%.4f,%.4f,%.2f,%d,%.3f,%.4f\n",
 	                       theta, theta_dot, motor_effort,
-	                       final_speed, (int)drive_dir);
+	                       final_speed, dist_m, target_angle);
 	            }
 
 	            // ── Spin-wait for precise loop period ──
