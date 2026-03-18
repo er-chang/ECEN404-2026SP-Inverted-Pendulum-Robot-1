@@ -209,9 +209,6 @@ int main(void)
       HAL_Delay(10);
   }
 
-  // Kick off first DMA read — if this fails, the loop will abort+fallback
-  Start_IMU_DMA(&imu, &hi2c2);
-
   int loop_counter = 0;
   int debug_counter = 0;
   const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
@@ -232,32 +229,8 @@ int main(void)
 	            if (dt > 0.05f || dt < 0.001f) dt = 0.005f; // sanity clamp
 	            prev_time = loop_start;
 
-	            // ── 1. SENSORS (DMA with blocking fallback) ──
-	            if (imu_dma_ready) {
-	                imu_dma_ready = 0;
-	                Process_IMU_Data(&imu);
-	                Start_IMU_DMA(&imu, &hi2c2);
-	            } else {
-	                // DMA didn't complete — abort it so I2C returns to READY,
-	                // otherwise HAL_I2C_Mem_Read sees BUSY and refuses to read.
-	                if (hi2c2.State != HAL_I2C_STATE_READY) {
-	                    HAL_I2C_Master_Abort_IT(&hi2c2, (imu.addr << 1));
-	                    // Wait for abort to finish (typically <100us)
-	                    uint32_t abort_start = __HAL_TIM_GET_COUNTER(&htim2);
-	                    while (hi2c2.State != HAL_I2C_STATE_READY) {
-	                        if ((__HAL_TIM_GET_COUNTER(&htim2) - abort_start) > 500) {
-	                            // Abort timed out — force reset I2C
-	                            hi2c2.State = HAL_I2C_STATE_READY;
-	                            break;
-	                        }
-	                    }
-	                }
-	                Read_IMU(&imu, &hi2c2);
-	                // Re-attempt DMA for next loop
-	                if (imu.status == HAL_OK) {
-	                    Start_IMU_DMA(&imu, &hi2c2);
-	                }
-	            }
+	            // ── 1. READ IMU (blocking) ──
+	            Read_IMU(&imu, &hi2c2);
 	            filtered_gyro = 0.8f * filtered_gyro + 0.2f * imu.gyro.dps_y;
 	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
