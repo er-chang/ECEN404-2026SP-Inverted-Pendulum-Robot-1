@@ -125,9 +125,9 @@ int main(void)
 	//   ki: add LAST, only if robot settles at wrong distance.
 	//        Too high → slow hunting oscillation
 	//        Too low  → steady-state offset from target
-	float kp = 0.10f;   // target_angle ≈ 0.05 rad at 0.5m error (was 1.65)
-	float ki = 0.002f;   // very gentle integral (was 0.04)
-	float kd = 0.20f;    // moderate damping (was 3.21)
+	float kp = 0.10f;   // target_angle ≈ 0.05 rad at 0.5m error
+	float ki = 0.0f;     // off for now — add once position hold works
+	float kd = 0.0f;     // off for now — sonar too noisy for derivative
 	float target_angle = 0.0f; // Desired angle to return to stabilization.
 	int test_speed;
 	float target_dist;
@@ -254,18 +254,8 @@ int main(void)
 	                    pos_prev_error = pos_error;
 	                    target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
 
-	                    if (target_angle >  0.05f) target_angle =  0.05f;
-	                    if (target_angle < -0.05f) target_angle = -0.05f;
-
-	                    // Velocity damping
-	                    static float prev_dist_m = 0.5f;
-	                    float robot_vel = (prev_dist_m - dist_m) / outer_dt;
-	                    prev_dist_m = dist_m;
-	                    const float velocity_damping = 0.10f;
-	                    target_angle -= velocity_damping * robot_vel;
-
-	                    if (target_angle >  0.05f) target_angle =  0.05f;
-	                    if (target_angle < -0.05f) target_angle = -0.05f;
+	                    if (target_angle >  0.03f) target_angle =  0.03f;
+	                    if (target_angle < -0.03f) target_angle = -0.03f;
 	                }
 	            }
 	            // ── 2. COMPLEMENTARY FILTER (uses measured dt) ──
