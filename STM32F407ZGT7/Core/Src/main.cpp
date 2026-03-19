@@ -213,13 +213,12 @@ int main(void)
 	            // ── 1. READ IMU (blocking) ──
 	            Read_IMU(&imu, &hi2c2);
 	            filtered_gyro = 0.80f * filtered_gyro + 0.20f * imu.gyro.dps_y;
-	            theta_dot = filtered_gyro * (PI_OVER_180);  // filtered — for comp filter
-	            float theta_dot_raw = imu.gyro.dps_y * (PI_OVER_180);  // raw — for Kd (zero lag)
+	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
 	            /* ── OUTER LOOP DISABLED — inner loop tuning only ── */
-	            // ── 2. COMPLEMENTARY FILTER (uses filtered theta_dot) ──
-	            theta = 0.96f * (theta + (theta_dot * dt)) + 0.04f * pitch_accel;
+	            // ── 2. COMPLEMENTARY FILTER ──
+	            theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
 
 	            // ── 5. INNER LQR LOOP ──
 	            balance_error = theta - target_angle;
@@ -228,10 +227,8 @@ int main(void)
 	            if (balance_integral >  0.2f) balance_integral =  0.2f;
 	            if (balance_integral < -0.2f) balance_integral = -0.2f;
 
-	            // Kd uses raw gyro (zero phase lag) — damping reacts instantly
-	            // Dead zone absorbs raw noise near balance point
 	            motor_effort = (35.0f * balance_error)
-	                         + (8.0f * theta_dot_raw)
+	                         + (8.0f * theta_dot)
 	                         + (0.5f * balance_integral);
 
 	            // ── 6. ACTUATION ──
@@ -259,8 +256,8 @@ int main(void)
 	            debug_counter++;
 	            if (debug_counter >= 10) {
 	                debug_counter = 0;
-	                printf("%.4f,%.4f,%.4f,%.2f,%d\n",
-	                       theta, theta_dot, theta_dot_raw,
+	                printf("%.4f,%.4f,%.2f,%d\n",
+	                       theta, theta_dot,
 	                       motor_effort, final_speed);
 	            }
 
