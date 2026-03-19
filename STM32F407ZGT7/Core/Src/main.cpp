@@ -49,10 +49,16 @@ DMA_HandleTypeDef hdma_i2c2_rx;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim5;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 static const float PI_OVER_180 = 3.14159f / 180.0f;
+// Encoder: 7 PPR × 34:1 gear × 4 (quadrature) = 952 counts/rev
+// Wheel: 50mm diameter → 0.157m circumference
+// 952 counts / 0.157m = 6064 counts/meter
+static const float COUNTS_PER_METER = 6064.0f;
 static const float PWM_SCALE = 50.0f;
 
 // Ultrasonic Sensors
@@ -97,6 +103,8 @@ static void MX_TIM2_Init(void);
 static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 int _write(int32_t file, uint8_t *ptr, int32_t len);
+static void MX_TIM4_Encoder_Init(void);
+static void MX_TIM5_Encoder_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -168,6 +176,8 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM8_Init();
+  MX_TIM4_Encoder_Init();
+  MX_TIM5_Encoder_Init();
   /* USER CODE BEGIN 2 */
   // Starting all necessary timers.
   HAL_TIM_Base_Start(&htim2); // Ultrasonic sensor Timer
@@ -216,20 +226,33 @@ int main(void)
 	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
-	            /* ── OUTER LOOP DISABLED — inner loop tuning only ── */
+	            // ── 1b. READ ENCODERS — measure wheel velocity ──
+	            static int32_t prev_enc4 = 0;
+	            static int32_t prev_enc5 = 0;
+	            int32_t enc4 = (int16_t)__HAL_TIM_GET_COUNTER(&htim4); // 16-bit, signed
+	            int32_t enc5 = (int32_t)__HAL_TIM_GET_COUNTER(&htim5); // 32-bit
+	            int32_t delta4 = enc4 - prev_enc4;
+	            int32_t delta5 = enc5 - prev_enc5;
+	            prev_enc4 = enc4;
+	            prev_enc5 = enc5;
+	            // Average both encoders, convert to m/s
+	            // Sign: positive = robot moving forward
+	            float wheel_velocity = ((float)(delta4 + delta5) * 0.5f) / (COUNTS_PER_METER * dt);
+
 	            // ── 2. COMPLEMENTARY FILTER ──
 	            theta = 0.992f * (theta + (theta_dot * dt)) + 0.008f * pitch_accel;
 
-	            // ── 5. INNER LQR LOOP ──
+	            // ── 3. BALANCE CONTROLLER (LQR-style: angle + rate + velocity) ──
 	            balance_error = theta - target_angle;
 
 	            balance_integral += balance_error * dt;
 	            if (balance_integral >  0.5f) balance_integral =  0.5f;
 	            if (balance_integral < -0.5f) balance_integral = -0.5f;
 
-	            motor_effort = (35.0f * balance_error)
-	                         + (5.0f * theta_dot)
-	                         + (8.0f * balance_integral);
+	            motor_effort = (35.0f * balance_error)      // Kp: correct tilt
+	                         + (5.0f * theta_dot)           // Kd: dampen oscillation
+	                         + (0.5f * balance_integral)    // Ki: steady-state correction
+	                         + (0.15f * wheel_velocity);    // Kv: OPPOSE DRIFT
 
 	            // ── 6. ACTUATION ──
 	            // Dead zone: if effort is tiny, stop motors entirely.
@@ -541,6 +564,91 @@ static void MX_TIM8_Init(void)
   /* USER CODE END TIM8_Init 2 */
   HAL_TIM_MspPostInit(&htim8);
 
+}
+
+/**
+  * @brief TIM4 Encoder Mode — PD12 (CH1), PD13 (CH2)
+  */
+static void MX_TIM4_Encoder_Init(void)
+{
+  TIM_Encoder_InitTypeDef sConfig = {0};
+
+  __HAL_RCC_TIM4_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+
+  // Configure PD12, PD13 as TIM4 CH1/CH2 (AF2)
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_12 | GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 0;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 0x0F;  // max hardware filter — rejects noise
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 0x0F;
+
+  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK) {
+    Error_Handler();
+  }
+  // Start encoder counting
+  HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+}
+
+/**
+  * @brief TIM5 Encoder Mode — PA0 (CH1), PA1 (CH2)
+  */
+static void MX_TIM5_Encoder_Init(void)
+{
+  TIM_Encoder_InitTypeDef sConfig = {0};
+
+  __HAL_RCC_TIM5_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  // Configure PA0, PA1 as TIM5 CH1/CH2 (AF2)
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF2_TIM5;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  htim5.Instance = TIM5;
+  htim5.Init.Prescaler = 0;
+  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim5.Init.Period = 0xFFFFFFFF;  // TIM5 is 32-bit
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 0x0F;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 0x0F;
+
+  if (HAL_TIM_Encoder_Init(&htim5, &sConfig) != HAL_OK) {
+    Error_Handler();
+  }
+  HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);
 }
 
 /**
