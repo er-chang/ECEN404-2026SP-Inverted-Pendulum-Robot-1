@@ -53,7 +53,7 @@ TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 static const float PI_OVER_180 = 3.14159f / 180.0f;
-static const float PWM_SCALE = 35.0f;
+static const float PWM_SCALE = 50.0f;
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -192,7 +192,7 @@ int main(void)
 
   int loop_counter = 0;
   int debug_counter = 0;
-  const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → ~200 Hz control rate
+  const uint32_t LOOP_PERIOD_US = 2000; // 2 ms target → 500 Hz control rate
   /* USER CODE END 2 */
 
   /* Infinite loop */
