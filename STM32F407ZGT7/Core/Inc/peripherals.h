@@ -156,7 +156,7 @@ void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
 void Read_IMU(IMU* imu, I2C_HandleTypeDef* i2c) {
     // Start reading from the first Gyro register (0x22)
     // The LSM6DSOX auto-increments through to the Accel registers
-    imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->data, 12, 10);
+    imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->data, 12, 2);
 
     // --- Process Gyro (First 6 bytes) ---
     imu->gyro.dps_x = (float)((int16_t)((imu->data[1] << 8) | imu->data[0])) * 0.00875f;
