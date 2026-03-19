@@ -33,9 +33,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MAX_SPEED 1024
+#define MAX_SPEED 256
 #define MIN_SPEED 0
-#define PWM_DEADZONE 100       // Minimum PWM to overcome motor static friction (10-bit)
+#define PWM_DEADZONE 25        // Minimum PWM to overcome motor static friction
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,7 +53,7 @@ TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 static const float PI_OVER_180 = 3.14159f / 180.0f;
-static const float PWM_SCALE = 200.0f;  // 4x for 10-bit PWM (was 50 at 8-bit)
+static const float PWM_SCALE = 50.0f;
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -218,7 +218,7 @@ int main(void)
 
 	            /* ── OUTER LOOP DISABLED — inner loop tuning only ── */
 	            // ── 2. COMPLEMENTARY FILTER ──
-	            theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
+	            theta = 0.992f * (theta + (theta_dot * dt)) + 0.008f * pitch_accel;
 
 	            // ── 5. INNER LQR LOOP ──
 	            balance_error = theta - target_angle;
@@ -361,9 +361,9 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 7;
+  htim1.Init.Prescaler = 31;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 1023;
+  htim1.Init.Period = 255;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -489,9 +489,9 @@ static void MX_TIM8_Init(void)
 
   /* USER CODE END TIM8_Init 1 */
   htim8.Instance = TIM8;
-  htim8.Init.Prescaler = 7;
+  htim8.Init.Prescaler = 31;
   htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim8.Init.Period = 1023;
+  htim8.Init.Period = 255;
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
