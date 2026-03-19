@@ -53,7 +53,7 @@ TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 static const float PI_OVER_180 = 3.14159f / 180.0f;
-static const float PWM_SCALE = 40.0f;
+static const float PWM_SCALE = 35.0f;
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -212,7 +212,7 @@ int main(void)
 
 	            // ── 1. READ IMU (blocking) ──
 	            Read_IMU(&imu, &hi2c2);
-	            filtered_gyro = 0.85f * filtered_gyro + 0.15f * imu.gyro.dps_y;
+	            filtered_gyro = 0.80f * filtered_gyro + 0.20f * imu.gyro.dps_y;
 	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
 	            // Negates g_x so atan2(g_z, -g_x) = 0 when balanced.
@@ -230,16 +230,18 @@ int main(void)
 	            if (balance_integral >  0.2f) balance_integral =  0.2f;
 	            if (balance_integral < -0.2f) balance_integral = -0.2f;
 
-	            motor_effort = (40.0f * balance_error)
+	            motor_effort = (35.0f * balance_error)
 	                         + (8.0f * theta_dot)
-	                         + (1.0f * balance_integral);
+	                         + (0.5f * balance_integral);
 
 	            // ── 6. ACTUATION ──
-	            final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
-
-	            // Smooth dead-zone compensation — add offset only when moving,
-	            //         avoids hard 0→25 discontinuity that caused chatter at balance point.
-	            if (final_speed > 0) final_speed += PWM_DEADZONE;
+	            // Dead zone: if effort is tiny, stop motors entirely.
+	            // Prevents micro-oscillation that seeds growing swings.
+	            if (fabs(motor_effort) < 0.15f) {
+	                final_speed = 0;
+	            } else {
+	                final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
+	            }
 	            if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
 
 	            drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
