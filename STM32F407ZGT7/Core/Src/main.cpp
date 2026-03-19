@@ -53,7 +53,7 @@ TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 static const float PI_OVER_180 = 3.14159f / 180.0f;
-static const float PWM_SCALE = 35.0f;
+static const float PWM_SCALE = 40.0f;
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -212,69 +212,27 @@ int main(void)
 
 	            // ── 1. READ IMU (blocking) ──
 	            Read_IMU(&imu, &hi2c2);
-	            filtered_gyro = 0.9f * filtered_gyro + 0.1f * imu.gyro.dps_y;
+	            filtered_gyro = 0.85f * filtered_gyro + 0.15f * imu.gyro.dps_y;
 	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            // IMU mounted with x-axis pointing UP → g_x = -1g when upright.
 	            // Negates g_x so atan2(g_z, -g_x) = 0 when balanced.
 	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
-	            // ── Sonar: fire every 10th loop (~50 ms) ──
-	            // Skip outer loop for first 400 loops (2 sec) so inner loop stabilizes
-	            static uint32_t total_loops = 0;
-	            total_loops++;
-	            loop_counter++;
-	            if (loop_counter >= 10 && total_loops > 400) {
-	                getSonarDistance(&frontSensor);
-	                loop_counter = 0;
-
-	                static uint32_t prev_outer_time = 0;
-	                float outer_dt = (prev_outer_time == 0) ? 0.05f
-	                                 : (float)(loop_start - prev_outer_time) * 1e-6f;
-	                if (outer_dt > 0.2f || outer_dt < 0.01f) outer_dt = 0.05f;
-	                prev_outer_time = loop_start;
-
-	                // HC-SR04 valid range: 2–400 cm.  Outside that → no object.
-	                if (frontSensor.distance > 2.0f && frontSensor.distance < 400.0f) {
-	                    static float filtered_dist = 0.5f;
-	                    filtered_dist = 0.7f * filtered_dist + 0.3f * (frontSensor.distance / 100.0f);
-	                    dist_m = filtered_dist;
-
-	                    // OUTER PID LOOP
-	                    static float pos_integral = 0.0f;
-	                    static float pos_prev_error = 0.0f;
-	                    static int   pos_first_reading = 1;
-	                    pos_error = 0.5f - dist_m;
-
-	                    if (pos_first_reading) {
-	                        pos_prev_error = pos_error;
-	                        pos_first_reading = 0;
-	                    }
-
-	                    pos_integral += pos_error * outer_dt;
-	                    if (pos_integral >  0.1f) pos_integral =  0.1f;
-	                    if (pos_integral < -0.1f) pos_integral = -0.1f;
-	                    float pos_derivative = (pos_error - pos_prev_error) / outer_dt;
-	                    pos_prev_error = pos_error;
-	                    target_angle = -(kp * pos_error + ki * pos_integral + kd * pos_derivative);
-
-	                    if (target_angle >  0.03f) target_angle =  0.03f;
-	                    if (target_angle < -0.03f) target_angle = -0.03f;
-	                }
-	            }
+	            /* ── OUTER LOOP DISABLED — inner loop tuning only ── */
 	            // ── 2. COMPLEMENTARY FILTER (uses measured dt) ──
-	            theta = 0.98f * (theta + (theta_dot * dt)) + 0.02f * pitch_accel;
+	            theta = 0.96f * (theta + (theta_dot * dt)) + 0.04f * pitch_accel;
 
 	            // ── 5. INNER LQR LOOP ──
 	            balance_error = theta - target_angle;
 
 	            //         (CoM offset, surface slope, asymmetric weight on 4-wheel platform)
 	            balance_integral += balance_error * dt;
-	            if (balance_integral >  0.5f) balance_integral =  0.5f;
-	            if (balance_integral < -0.5f) balance_integral = -0.5f;
+	            if (balance_integral >  0.2f) balance_integral =  0.2f;
+	            if (balance_integral < -0.2f) balance_integral = -0.2f;
 
-	            motor_effort = (35.501f * balance_error)
-	                         + (12.0f * theta_dot)
-	                         + (0.0f * balance_integral);
+	            motor_effort = (40.0f * balance_error)
+	                         + (8.0f * theta_dot)
+	                         + (1.0f * balance_integral);
 
 	            // ── 6. ACTUATION ──
 	            final_speed = (int)(fabs(motor_effort) * PWM_SCALE);
