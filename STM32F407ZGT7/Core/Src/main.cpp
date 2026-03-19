@@ -224,12 +224,12 @@ int main(void)
 	            balance_error = theta - target_angle;
 
 	            balance_integral += balance_error * dt;
-	            if (balance_integral >  0.2f) balance_integral =  0.2f;
-	            if (balance_integral < -0.2f) balance_integral = -0.2f;
+	            if (balance_integral >  0.5f) balance_integral =  0.5f;
+	            if (balance_integral < -0.5f) balance_integral = -0.5f;
 
 	            motor_effort = (35.0f * balance_error)
-	                         + (8.0f * theta_dot)
-	                         + (0.5f * balance_integral);
+	                         + (5.0f * theta_dot)
+	                         + (8.0f * balance_integral);
 
 	            // ── 6. ACTUATION ──
 	            // Dead zone: if effort is tiny, stop motors entirely.
@@ -252,14 +252,7 @@ int main(void)
 	            TIM1->CCR3 = final_speed;
 	            TIM8->CCR3 = final_speed;
 
-	            // ── LIVE DEBUG (every 10th loop = ~20 Hz over UART) ──
-	            debug_counter++;
-	            if (debug_counter >= 10) {
-	                debug_counter = 0;
-	                printf("%.4f,%.4f,%.2f,%d\n",
-	                       theta, theta_dot,
-	                       motor_effort, final_speed);
-	            }
+	            // printf disabled — ITM_SendChar blocks if SWO FIFO full
 
 	            // ── Spin-wait for precise loop period ──
 	            while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
