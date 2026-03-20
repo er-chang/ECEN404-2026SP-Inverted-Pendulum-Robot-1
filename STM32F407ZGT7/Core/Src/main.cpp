@@ -35,7 +35,7 @@
 /* USER CODE BEGIN PD */
 #define MAX_SPEED 256
 #define MIN_SPEED 0
-#define PWM_DEADZONE 25        // Minimum PWM to overcome motor static friction
+#define PWM_DEADZONE 10        // Reduced: old value (25=9.8%) was 3x the torque needed at balance
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -59,7 +59,7 @@ static const float PI_OVER_180 = 3.14159f / 180.0f;
 // Wheel: 50mm diameter → 0.157m circumference
 // 952 counts / 0.157m = 6064 counts/meter
 static const float COUNTS_PER_METER = 6064.0f;
-static const float PWM_SCALE = 50.0f;
+static const float PWM_SCALE = 28.0f;  // Low scale = saturation at 0.24 rad (14°) instead of 0.09 rad
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -176,8 +176,6 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM8_Init();
-  MX_TIM4_Encoder_Init();
-  MX_TIM5_Encoder_Init();
   /* USER CODE BEGIN 2 */
   // Starting all necessary timers.
   HAL_TIM_Base_Start(&htim2); // Ultrasonic sensor Timer
@@ -222,22 +220,9 @@ int main(void)
 
 	            // ── 1. READ IMU (blocking) ──
 	            Read_IMU(&imu, &hi2c2);
-	            filtered_gyro = 0.80f * filtered_gyro + 0.20f * imu.gyro.dps_y;
+	            filtered_gyro = 0.75f * filtered_gyro + 0.25f * imu.gyro.dps_y;
 	            theta_dot = filtered_gyro * (PI_OVER_180);
 	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
-
-	            // ── 1b. READ ENCODERS — measure wheel velocity ──
-	            static int32_t prev_enc4 = 0;
-	            static int32_t prev_enc5 = 0;
-	            int32_t enc4 = (int16_t)__HAL_TIM_GET_COUNTER(&htim4); // 16-bit, signed
-	            int32_t enc5 = (int32_t)__HAL_TIM_GET_COUNTER(&htim5); // 32-bit
-	            int32_t delta4 = enc4 - prev_enc4;
-	            int32_t delta5 = enc5 - prev_enc5;
-	            prev_enc4 = enc4;
-	            prev_enc5 = enc5;
-	            // Average both encoders, convert to m/s
-	            // Sign: positive = robot moving forward
-	            float wheel_velocity = ((float)(delta4 + delta5) * 0.5f) / (COUNTS_PER_METER * dt);
 
 	            // ── 2. COMPLEMENTARY FILTER ──
 	            theta = 0.992f * (theta + (theta_dot * dt)) + 0.008f * pitch_accel;
@@ -246,18 +231,15 @@ int main(void)
 	            balance_error = theta - target_angle;
 
 	            balance_integral += balance_error * dt;
-	            if (balance_integral >  0.5f) balance_integral =  0.5f;
-	            if (balance_integral < -0.5f) balance_integral = -0.5f;
+	            if (balance_integral >  1.0f) balance_integral =  1.0f;
+	            if (balance_integral < -1.0f) balance_integral = -1.0f;
 
-	            motor_effort = (35.0f * balance_error)      // Kp: correct tilt
-	                         + (5.0f * theta_dot)           // Kd: dampen oscillation
-	                         + (0.5f * balance_integral)    // Ki: steady-state correction
-	                         + (0.15f * wheel_velocity);    // Kv: OPPOSE DRIFT
+	            motor_effort = (38.0f * balance_error)
+	                         + (9.0f * theta_dot)
+	                         + (0.3f * balance_integral);
 
 	            // ── 6. ACTUATION ──
-	            // Dead zone: if effort is tiny, stop motors entirely.
-	            // Prevents micro-oscillation that seeds growing swings.
-	            if (fabs(motor_effort) < 0.15f) {
+	            if (fabs(motor_effort) < 0.10f) {
 	                final_speed = 0;
 	            } else {
 	                final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
