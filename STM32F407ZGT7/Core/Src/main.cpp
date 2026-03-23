@@ -212,73 +212,19 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
+	  setSpeed(&FRM, 256, GPIO_PIN_SET);
+	  setSpeed(&FLM, 256, GPIO_PIN_SET);
+	  setSpeed(&BRM, 256, GPIO_PIN_SET);
+	  setSpeed(&BLM, 256, GPIO_PIN_SET);
 
-	            // ── Measure real dt for the complementary filter ──
-	            dt = (prev_time == 0) ? 0.002f
-	                       : (float)(loop_start - prev_time) * 1e-6f;
-	            if (dt > 0.02f || dt < 0.0005f) dt = 0.002f; // sanity clamp for 500Hz
-	            prev_time = loop_start;
+	  HAL_Delay(500);
 
-	            // ── 1. READ IMU (blocking) ──
-	            Read_IMU(&imu, &hi2c2);
-	            filtered_gyro = 0.80f * filtered_gyro + 0.20f * imu.gyro.dps_y;
-	            theta_dot = filtered_gyro * (PI_OVER_180);
-	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
+	  setSpeed(&FRM, 256, GPIO_PIN_RESET);
+	  setSpeed(&FLM, 256, GPIO_PIN_RESET);
+	  setSpeed(&BRM, 256, GPIO_PIN_RESET);
+	  setSpeed(&BLM, 256, GPIO_PIN_RESET);
 
-	            // ── 1b. READ ENCODERS — measure wheel velocity ──
-	            static int32_t prev_enc4 = 0;
-	            static int32_t prev_enc5 = 0;
-	            int32_t enc4 = (int16_t)__HAL_TIM_GET_COUNTER(&htim4); // 16-bit, signed
-	            int32_t enc5 = (int32_t)__HAL_TIM_GET_COUNTER(&htim5); // 32-bit
-	            int32_t delta4 = enc4 - prev_enc4;
-	            int32_t delta5 = enc5 - prev_enc5;
-	            prev_enc4 = enc4;
-	            prev_enc5 = enc5;
-	            // Average both encoders, convert to m/s
-	            // Sign: positive = robot moving forward
-	            float wheel_velocity = ((float)(delta4 + delta5) * 0.5f) / (COUNTS_PER_METER * dt);
-
-	            // ── 2. COMPLEMENTARY FILTER ──
-	            theta = 0.992f * (theta + (theta_dot * dt)) + 0.008f * pitch_accel;
-
-	            // ── 3. BALANCE CONTROLLER (LQR-style: angle + rate + velocity) ──
-	            balance_error = theta - target_angle;
-
-	            balance_integral += balance_error * dt;
-	            if (balance_integral >  0.5f) balance_integral =  0.5f;
-	            if (balance_integral < -0.5f) balance_integral = -0.5f;
-
-	            motor_effort = (35.0f * balance_error)      // Kp: correct tilt
-	                         + (5.0f * theta_dot)           // Kd: dampen oscillation
-	                         + (0.5f * balance_integral)    // Ki: steady-state correction
-	                         + (0.15f * wheel_velocity);    // Kv: OPPOSE DRIFT
-
-	            // ── 6. ACTUATION ──
-	            // Dead zone: if effort is tiny, stop motors entirely.
-	            // Prevents micro-oscillation that seeds growing swings.
-	            if (fabs(motor_effort) < 0.15f) {
-	                final_speed = 0;
-	            } else {
-	                final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
-	            }
-	            if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
-
-	            drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-
-	            HAL_GPIO_WritePin(FLM.directionPort, FLM.directionPin, drive_dir);
-	            HAL_GPIO_WritePin(FRM.directionPort, FRM.directionPin, drive_dir);
-	            HAL_GPIO_WritePin(BLM.directionPort, BLM.directionPin, drive_dir);
-	            HAL_GPIO_WritePin(BRM.directionPort, BRM.directionPin, drive_dir);
-	            TIM1->CCR1 = final_speed;
-	            TIM1->CCR2 = final_speed;
-	            TIM1->CCR3 = final_speed;
-	            TIM8->CCR3 = final_speed;
-
-	            // printf disabled — ITM_SendChar blocks if SWO FIFO full
-
-	            // ── Spin-wait for precise loop period ──
-	            while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
+	  HAL_Delay(500);
   }
   /* USER CODE END 3 */
 }
