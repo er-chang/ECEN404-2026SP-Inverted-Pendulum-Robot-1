@@ -35,7 +35,7 @@
 /* USER CODE BEGIN PD */
 #define MAX_SPEED 256
 #define MIN_SPEED 0
-#define PWM_DEADZONE 25        // Minimum PWM to overcome motor static friction
+#define PWM_DEADZONE 22        // Minimum PWM to overcome motor static friction
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,16 +49,10 @@ DMA_HandleTypeDef hdma_i2c2_rx;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
-TIM_HandleTypeDef htim4;
-TIM_HandleTypeDef htim5;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
-static const float PI_OVER_180 = 3.14159f / 180.0f;
-// Encoder: 7 PPR × 34:1 gear × 4 (quadrature) = 952 counts/rev
-// Wheel: 50mm diameter → 0.157m circumference
-// 952 counts / 0.157m = 6064 counts/meter
-static const float COUNTS_PER_METER = 6064.0f;
+static const float PI_OVER_180 = 3.14159265f / 180.0f;
 static const float PWM_SCALE = 50.0f;
 
 // Ultrasonic Sensors
@@ -85,8 +79,8 @@ Ultrasonic frontSensor = {
 };
 // Motors
 Motor FLM = { .PWM = &TIM1->CCR1, .directionPort = GPIOF, .directionPin = GPIO_PIN_13 }; // Front Left Motor
-Motor FRM = { .PWM = &TIM1->CCR2, .directionPort = GPIOF, .directionPin = GPIO_PIN_14 }; // Front Right Motor
-Motor BLM = { .PWM = &TIM1->CCR3, .directionPort = GPIOF, .directionPin = GPIO_PIN_15 }; // Back Left Motor
+Motor FRM = { .PWM = &TIM1->CCR3, .directionPort = GPIOF, .directionPin = GPIO_PIN_14 }; // Front Right Motor — TIM1 CH3
+Motor BLM = { .PWM = &TIM1->CCR2, .directionPort = GPIOF, .directionPin = GPIO_PIN_15 }; // Back Left Motor — TIM1 CH2
 Motor BRM = { .PWM = &TIM8->CCR3, .directionPort = GPIOG, .directionPin = GPIO_PIN_0 }; // Back Right Motor
 // IMU
 IMU imu;
@@ -103,8 +97,6 @@ static void MX_TIM2_Init(void);
 static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 int _write(int32_t file, uint8_t *ptr, int32_t len);
-static void MX_TIM4_Encoder_Init(void);
-static void MX_TIM5_Encoder_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -176,8 +168,6 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM8_Init();
-  MX_TIM4_Encoder_Init();
-  MX_TIM5_Encoder_Init();
   /* USER CODE BEGIN 2 */
   // Starting all necessary timers.
   HAL_TIM_Base_Start(&htim2); // Ultrasonic sensor Timer
@@ -202,7 +192,7 @@ int main(void)
 
   int loop_counter = 0;
   int debug_counter = 0;
-  const uint32_t LOOP_PERIOD_US = 2000; // 2 ms target → 500 Hz control rate
+  const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → 200 Hz control rate
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -212,20 +202,36 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  setSpeed(&FRM, 256, GPIO_PIN_SET);
-	  setSpeed(&FLM, 256, GPIO_PIN_SET);
-	  setSpeed(&BRM, 256, GPIO_PIN_SET);
-	  setSpeed(&BLM, 256, GPIO_PIN_SET);
+	  // ── 1. READ IMU ──
+	  Read_IMU(&imu, &hi2c2);
 
-	  HAL_Delay(500);
+	  // Raw gyro — zero lag
+	  theta_dot = (imu.gyro.dps_y - imu.gyro.bias_y) * PI_OVER_180;
+	  pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
-	  setSpeed(&FRM, 256, GPIO_PIN_RESET);
-	  setSpeed(&FLM, 256, GPIO_PIN_RESET);
-	  setSpeed(&BRM, 256, GPIO_PIN_RESET);
-	  setSpeed(&BLM, 256, GPIO_PIN_RESET);
+	  // ── 2. COMPLEMENTARY FILTER — 70% gyro, 30% accel ──
+	  // Fast enough to respond (converges in ~3 loops = 15ms)
+	  // Smooth enough to kill motor vibration noise from accel
+	  theta = 0.85f * (theta + (theta_dot * 0.005f)) + 0.15f * pitch_accel;
 
-	  HAL_Delay(500);
-	  HAL_Delay(10);
+	  // ── 3. PD CONTROLLER (Ziegler-Nichols tuned) ──
+	  // Ku≈38, Tu≈1.0s → Kp=0.8*Ku=30, Kd=Kp*Tu/8=3.75
+	  motor_effort = (38.0f * theta)
+	               + (4.0f * theta_dot);
+
+	  // ── 4. ACTUATION — match the accel test: scale * |effort| + deadzone ──
+	  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
+	  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
+	  if (fabs(motor_effort) < 0.01f) final_speed = 0;
+
+	  drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+
+	  setSpeed(&FLM, final_speed, drive_dir);
+	  setSpeed(&FRM, final_speed, drive_dir);
+	  setSpeed(&BLM, final_speed, drive_dir);
+	  setSpeed(&BRM, final_speed, drive_dir);
+
+	  HAL_Delay(5);
   }
   /* USER CODE END 3 */
 }
@@ -412,7 +418,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 167;
+  htim2.Init.Prescaler = 83;  // 84MHz/(83+1) = 1MHz = 1μs ticks (was 167 = 2μs WRONG)
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -514,91 +520,6 @@ static void MX_TIM8_Init(void)
 }
 
 /**
-  * @brief TIM4 Encoder Mode — PD12 (CH1), PD13 (CH2)
-  */
-static void MX_TIM4_Encoder_Init(void)
-{
-  TIM_Encoder_InitTypeDef sConfig = {0};
-
-  __HAL_RCC_TIM4_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-
-  // Configure PD12, PD13 as TIM4 CH1/CH2 (AF2)
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  GPIO_InitStruct.Pin = GPIO_PIN_12 | GPIO_PIN_13;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-  htim4.Instance = TIM4;
-  htim4.Init.Prescaler = 0;
-  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 65535;
-  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0x0F;  // max hardware filter — rejects noise
-  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0x0F;
-
-  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK) {
-    Error_Handler();
-  }
-  // Start encoder counting
-  HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
-}
-
-/**
-  * @brief TIM5 Encoder Mode — PA0 (CH1), PA1 (CH2)
-  */
-static void MX_TIM5_Encoder_Init(void)
-{
-  TIM_Encoder_InitTypeDef sConfig = {0};
-
-  __HAL_RCC_TIM5_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-
-  // Configure PA0, PA1 as TIM5 CH1/CH2 (AF2)
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM5;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  htim5.Instance = TIM5;
-  htim5.Init.Prescaler = 0;
-  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim5.Init.Period = 0xFFFFFFFF;  // TIM5 is 32-bit
-  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0x0F;
-  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0x0F;
-
-  if (HAL_TIM_Encoder_Init(&htim5, &sConfig) != HAL_OK) {
-    Error_Handler();
-  }
-  HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);
-}
-
-/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -669,7 +590,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : Echo1_Pin */
   GPIO_InitStruct.Pin = Echo1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;  // was RISING only — never caught falling edge
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Echo1_GPIO_Port, &GPIO_InitStruct);
 

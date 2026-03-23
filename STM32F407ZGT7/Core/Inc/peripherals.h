@@ -53,7 +53,7 @@ typedef struct Accelerometer{
 	volatile float 	g_z {0};
 	uint8_t 		addr {OUTX_L_A};
 	uint8_t 		control_addr {CTRL1_XL};
-	uint8_t 		control {0x5E};
+	uint8_t 		control {0x70};  // ODR=833Hz, FS=±2g (was 0x5E: wrong FS and ODR)
 	uint8_t 		out[6] {0};
 	float 			drift_cancel;
 } Accelerometer;
@@ -65,9 +65,10 @@ typedef struct Gyroscope{
 	volatile float 	dps_z {0};
 	uint8_t 		addr {OUTX_L_G};
 	uint8_t 		control_addr {CTRL2_G};
-	uint8_t 		control {0x5E};
+	uint8_t 		control {0x70};  // ODR=833Hz, FS=±250dps (was 0x5E: ±125dps, gyro 2x too large)
 	uint8_t 		out[6];
 	float 			drift_cancel;
+	float           bias_y {0.0f};  // Gyro Y-axis bias measured at startup
 } Gyroscope;
 
 // IMU
@@ -102,6 +103,8 @@ void getSonarDistance(Ultrasonic* sensor){
 		sensor->distance = (float)echo_width * 0.01715f;
 	}
 	// B. Reset timestamps and fire a new trigger pulse for the next call
+	sensor->echo_start = 0;
+	sensor->echo_end   = 0;
 	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_SET);
 	Delay_us(10, sensor->timer);
 	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_RESET);
@@ -156,7 +159,7 @@ void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
 void Read_IMU(IMU* imu, I2C_HandleTypeDef* i2c) {
     // Start reading from the first Gyro register (0x22)
     // The LSM6DSOX auto-increments through to the Accel registers
-    imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->data, 12, 2);
+    imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->data, 12, 10);
 
     // --- Process Gyro (First 6 bytes) ---
     imu->gyro.dps_x = (float)((int16_t)((imu->data[1] << 8) | imu->data[0])) * 0.00875f;
@@ -187,6 +190,23 @@ void Process_IMU_Data(IMU* imu) {
     imu->accel.g_z = (float)((int16_t)((imu->data[11] << 8) | imu->data[10])) * 0.000061f;
 }
 
+
+/*GYRO CALIBRATION — call once at startup, robot must be stationary*/
+void Calibrate_Gyro(IMU* imu, I2C_HandleTypeDef* i2c, uint16_t samples) {
+    float sum_y = 0.0f;
+    uint16_t good = 0;
+    for (uint16_t i = 0; i < samples; i++) {
+        Read_IMU(imu, i2c);
+        if (imu->status == HAL_OK) {
+            sum_y += imu->gyro.dps_y;
+            good++;
+        }
+        HAL_Delay(2);
+    }
+    if (good > 0) {
+        imu->gyro.bias_y = sum_y / (float)good;
+    }
+}
 
 /*IMU Initialization Function*/
 void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){
@@ -258,8 +278,9 @@ void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){
 	    	printf("SOMETHING IS WRONG WITH STATUS\n\n");
 	    }
 	    printf("---Gyroscope Initialization is DONE---\n\n\n");
-	    /*End Accelerometer Initialization*/
+	    /*End Gyroscope Initialization*/
 		HAL_Delay(20);
+		Calibrate_Gyro(imu, i2c, 50);  // ~100ms, robot must be still
 }
 /* End IMU INIT FUNCTION*/
 
