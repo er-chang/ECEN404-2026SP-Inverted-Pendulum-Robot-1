@@ -16,8 +16,8 @@
 #define WHO_AM_I_VALUE 0x6C  // Value that should be in the who am i register
 #define CTRL1_XL      	0x10  // Location of First Accelerometer control register
 #define CTRL2_G			0x11  // Location of First Gyroscope control register
-#define OUTX_L_A      	0x28  // Location of Accelerometer output register
 #define OUTX_L_G	  	0x22  // Location of Gyroscope output register
+#define OUTX_L_A      	0x28  // Location of Accelerometer output register
 /*End Defines*/
 
 
@@ -53,7 +53,15 @@ typedef struct Accelerometer{
 	volatile float 	g_z {0};
 	uint8_t 		addr {OUTX_L_A};
 	uint8_t 		control_addr {CTRL1_XL};
-	uint8_t 		control {0x5E};
+	// ┌─────────────────────────────────────────────────────────┐
+	// │ CTRL1_XL = 0x70 → ODR=833Hz, FS=±2g, LPF2=off         │
+	// │ Sensitivity: 0.061 mg/LSB (used in Process_IMU_Data)    │
+	// │                                                         │
+	// │ OLD VALUE 0x5E WAS WRONG:                               │
+	// │   ODR=208Hz (stale reads), FS=±8g (code assumed ±2g),   │
+	// │   LPF2=on (extra latency)                               │
+	// └─────────────────────────────────────────────────────────┘
+	uint8_t 		control {0x70};
 	uint8_t 		out[6] {0};
 	float 			drift_cancel;
 } Accelerometer;
@@ -65,9 +73,18 @@ typedef struct Gyroscope{
 	volatile float 	dps_z {0};
 	uint8_t 		addr {OUTX_L_G};
 	uint8_t 		control_addr {CTRL2_G};
-	uint8_t 		control {0x5E};
+	// ┌─────────────────────────────────────────────────────────┐
+	// │ CTRL2_G = 0x70 → ODR=833Hz, FS=±250dps, FS_125=off     │
+	// │ Sensitivity: 8.75 mdps/LSB (used in Process_IMU_Data)   │
+	// │                                                         │
+	// │ OLD VALUE 0x5E WAS WRONG:                               │
+	// │   ODR=208Hz, FS_125=1 forced ±125dps (4.375 mdps/LSB)  │
+	// │   but code used 8.75 mdps/LSB → gyro reads 2x too large│
+	// └─────────────────────────────────────────────────────────┘
+	uint8_t 		control {0x70};
 	uint8_t 		out[6];
 	float 			drift_cancel;
+	float           bias_y {0.0f};  // Gyro Y-axis bias measured at startup
 } Gyroscope;
 
 // IMU
@@ -102,6 +119,8 @@ void getSonarDistance(Ultrasonic* sensor){
 		sensor->distance = (float)echo_width * 0.01715f;
 	}
 	// B. Reset timestamps and fire a new trigger pulse for the next call
+	sensor->echo_start = 0;
+	sensor->echo_end   = 0;
 	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_SET);
 	Delay_us(10, sensor->timer);
 	HAL_GPIO_WritePin(sensor->TriggerPort, sensor->TriggerPin, GPIO_PIN_RESET);
@@ -116,54 +135,19 @@ void setSpeed(Motor* motor, uint32_t speed, GPIO_PinState direction){
 }
 
 
-/*Accelerometer Read Function*/
-void Read_Accel(IMU* imu, I2C_HandleTypeDef* i2c)
-{
-	volatile int16_t x;
-	volatile int16_t y;
-	volatile int16_t z;
-   // Read 6-byte accelerometer output
-   imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->accel.addr, 1, imu->accel.out, 6, 1000);
-   // Combine LSB/MSB into 16-bit signed values
-   x = (int16_t)((imu->accel.out[1] << 8) | imu->accel.out[0]);
-   y = (int16_t)((imu->accel.out[3] << 8) | imu->accel.out[2]);
-   z = (int16_t)((imu->accel.out[5] << 8) | imu->accel.out[4]);
-   // Convert to g (±2g full scale → 0.061 mg/LSB)
-   imu->accel.g_x = (float)x * 0.061f / 1000.0f;
-   imu->accel.g_y = (float)y * 0.061f / 1000.0f;
-   imu->accel.g_z = (float)(z * 0.061f / 1000.0f);
-}
-
-
-/*Gyroscope Read Function*/
-void Read_Gyro(IMU* imu, I2C_HandleTypeDef* i2c)
-{
-	volatile int16_t x;
-	volatile int16_t y;
-	volatile int16_t z;
-	imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->gyro.out, 6, 1000);
-   x = (int16_t)((imu->gyro.out[1] << 8) | imu->gyro.out[0]);
-   y = (int16_t)((imu->gyro.out[3] << 8) | imu->gyro.out[2]);
-   z = (int16_t)((imu->gyro.out[5] << 8) | imu->gyro.out[4]);
-   // Convert to dps (±250 dps full scale → 8.75 mdps/LSB per LSM6DSOX datasheet)
-   imu->gyro.dps_x = (float)x * 8.75f / 1000.0f;
-   imu->gyro.dps_y = (float)y * 8.75f / 1000.0f;
-   imu->gyro.dps_z = (float)z * 8.75f / 1000.0f;
-}
-
-
-/*READ IMU - Reads Both Gyro and Accel Values from IMU (BLOCKING)*/
+/*READ IMU - Reads Both Gyro and Accel in a single 12-byte burst (BLOCKING)
+  Register map: 0x22..0x27 = gyro XYZ, 0x28..0x2D = accel XYZ (contiguous, auto-increment) */
 void Read_IMU(IMU* imu, I2C_HandleTypeDef* i2c) {
-    // Start reading from the first Gyro register (0x22)
-    // The LSM6DSOX auto-increments through to the Accel registers
     imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.addr, 1, imu->data, 12, 2);
 
-    // --- Process Gyro (First 6 bytes) ---
+    // --- Process Gyro (First 6 bytes: 0x22-0x27) ---
+    // ±250 dps → 8.75 mdps/LSB = 0.00875 dps/LSB
     imu->gyro.dps_x = (float)((int16_t)((imu->data[1] << 8) | imu->data[0])) * 0.00875f;
     imu->gyro.dps_y = (float)((int16_t)((imu->data[3] << 8) | imu->data[2])) * 0.00875f;
     imu->gyro.dps_z = (float)((int16_t)((imu->data[5] << 8) | imu->data[4])) * 0.00875f;
 
-    // --- Process Accel (Next 6 bytes) ---
+    // --- Process Accel (Next 6 bytes: 0x28-0x2D) ---
+    // ±2g → 0.061 mg/LSB = 0.000061 g/LSB
     imu->accel.g_x = (float)((int16_t)((imu->data[7] << 8) | imu->data[6])) * 0.000061f;
     imu->accel.g_y = (float)((int16_t)((imu->data[9] << 8) | imu->data[8])) * 0.000061f;
     imu->accel.g_z = (float)((int16_t)((imu->data[11] << 8) | imu->data[10])) * 0.000061f;
@@ -176,15 +160,35 @@ HAL_StatusTypeDef Start_IMU_DMA(IMU* imu, I2C_HandleTypeDef* i2c) {
 
 /*PROCESS IMU DATA - Converts raw bytes in imu->data to float values (call after DMA completes)*/
 void Process_IMU_Data(IMU* imu) {
-    // --- Gyro (First 6 bytes) ---
+    // --- Gyro (First 6 bytes) — ±250 dps, 8.75 mdps/LSB ---
     imu->gyro.dps_x = (float)((int16_t)((imu->data[1] << 8) | imu->data[0])) * 0.00875f;
     imu->gyro.dps_y = (float)((int16_t)((imu->data[3] << 8) | imu->data[2])) * 0.00875f;
     imu->gyro.dps_z = (float)((int16_t)((imu->data[5] << 8) | imu->data[4])) * 0.00875f;
 
-    // --- Accel (Next 6 bytes) ---
+    // --- Accel (Next 6 bytes) — ±2g, 0.061 mg/LSB ---
     imu->accel.g_x = (float)((int16_t)((imu->data[7] << 8) | imu->data[6])) * 0.000061f;
     imu->accel.g_y = (float)((int16_t)((imu->data[9] << 8) | imu->data[8])) * 0.000061f;
     imu->accel.g_z = (float)((int16_t)((imu->data[11] << 8) | imu->data[10])) * 0.000061f;
+}
+
+
+/*GYRO CALIBRATION — call once at startup, robot must be stationary
+  Averages N samples to find the zero-rate bias offset */
+void Calibrate_Gyro(IMU* imu, I2C_HandleTypeDef* i2c, uint16_t samples) {
+    float sum_y = 0.0f;
+    uint16_t good = 0;
+    for (uint16_t i = 0; i < samples; i++) {
+        Read_IMU(imu, i2c);
+        if (imu->status == HAL_OK) {
+            sum_y += imu->gyro.dps_y;
+            good++;
+        }
+        HAL_Delay(2);  // ~500 Hz sample rate during cal
+    }
+    if (good > 0) {
+        imu->gyro.bias_y = sum_y / (float)good;
+    }
+    printf("Gyro cal: bias_y = %.4f dps (%d samples)\n", imu->gyro.bias_y, good);
 }
 
 
@@ -227,42 +231,38 @@ void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){
 	    }
 	    printf("---WHO AM I test is DONE---\n\n\n");
 		/* End Who am I Test*/
-		/* Accelerometer Initialization: ODR = 1.66 kHz, FS = +- 2g*/
-	    printf("---Initializing Accelerometer---\n\n");
+
+		/* Accelerometer Initialization: ODR=833Hz, FS=±2g (CTRL1_XL=0x70) */
+	    printf("---Initializing Accelerometer (0x%02X)---\n\n", imu->accel.control);
 		HAL_I2C_Mem_Write(i2c, (imu->addr << 1), imu->accel.control_addr, 1, &(imu->accel.control), 1, 1000);
 	    imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->accel.control_addr, 1, imu->init_buffer, 1, 1000);
 	    if (imu->init_buffer[0] != imu->accel.control){
 	    	printf("SOMETHING IS WRONG\n");
-	    	printf("CTRL1_XL data = %x \n\n", imu->init_buffer[0]);
+	    	printf("CTRL1_XL data = %x (expected %x)\n\n", imu->init_buffer[0], imu->accel.control);
 	    }
 	    else{
 	    	printf("Accelerometer init. data is GOOD\n\n");
 	    }
-	    if (imu->status != HAL_OK){
-	    	printf("SOMETHING IS WRONG WITH STATUS\n\n");
-	    }
 	    printf("---Accelerometer Initialization is DONE---\n\n\n");
 	    /*End Accelerometer Initialization*/
-		/* Gyroscope Initialization: ODR = 1.66 kHz, FS = +- 250 dps*/
-	    printf("---Initializing Gyroscope---\n\n");
+
+		/* Gyroscope Initialization: ODR=833Hz, FS=±250dps (CTRL2_G=0x70) */
+	    printf("---Initializing Gyroscope (0x%02X)---\n\n", imu->gyro.control);
 		HAL_I2C_Mem_Write(i2c, (imu->addr << 1), imu->gyro.control_addr, 1, &(imu->gyro.control), 1, 1000);
 	    imu->status = HAL_I2C_Mem_Read(i2c, (imu->addr << 1), imu->gyro.control_addr, 1, imu->init_buffer, 1, 1000);
 	    if (imu->init_buffer[0] != imu->gyro.control){
 	    	printf("SOMETHING IS WRONG\n");
-	    	printf("CTRL2_G data = %x \n\n", imu->init_buffer[0]);
+	    	printf("CTRL2_G data = %x (expected %x)\n\n", imu->init_buffer[0], imu->gyro.control);
 	    }
 	    else{
 	    	printf("Gyroscope init. data is GOOD\n\n");
 	    }
-	    if (imu->status != HAL_OK){
-	    	printf("SOMETHING IS WRONG WITH STATUS\n\n");
-	    }
 	    printf("---Gyroscope Initialization is DONE---\n\n\n");
-	    /*End Accelerometer Initialization*/
-		HAL_Delay(20);
+	    /*End Gyroscope Initialization*/
+
+		HAL_Delay(50);  // Let ODR stabilize before calibration
+		Calibrate_Gyro(imu, i2c, 200);  // ~400ms, robot must be still
 }
 /* End IMU INIT FUNCTION*/
 
 #endif /* PERIPHERALS_H */
-
-

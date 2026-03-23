@@ -35,7 +35,7 @@
 /* USER CODE BEGIN PD */
 #define MAX_SPEED 256
 #define MIN_SPEED 0
-#define PWM_DEADZONE 10        // Reduced: old value (25=9.8%) was 3x the torque needed at balance
+#define PWM_DEADZONE 10
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,17 +49,11 @@ DMA_HandleTypeDef hdma_i2c2_rx;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
-TIM_HandleTypeDef htim4;
-TIM_HandleTypeDef htim5;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
-static const float PI_OVER_180 = 3.14159f / 180.0f;
-// Encoder: 7 PPR × 34:1 gear × 4 (quadrature) = 952 counts/rev
-// Wheel: 50mm diameter → 0.157m circumference
-// 952 counts / 0.157m = 6064 counts/meter
-static const float COUNTS_PER_METER = 6064.0f;
-static const float PWM_SCALE = 28.0f;  // Low scale = saturation at 0.24 rad (14°) instead of 0.09 rad
+static const float PI_OVER_180 = 3.14159265f / 180.0f;
+static const float PWM_SCALE = 28.0f;
 
 // Ultrasonic Sensors
 Ultrasonic rightSensor = {
@@ -103,8 +97,6 @@ static void MX_TIM2_Init(void);
 static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 int _write(int32_t file, uint8_t *ptr, int32_t len);
-static void MX_TIM4_Encoder_Init(void);
-static void MX_TIM5_Encoder_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -120,37 +112,20 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	// Moustafa's PID Variables
-	float dist_m = 0.0f; // Same distance in meters.
-	float pos_error; //calculates the position error
-	// TUNING GUIDE (tune in this order):
-	//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
-	//        Too high → robot lurches toward/away from obstacle
-	//        Too low  → robot barely reacts to distance changes
-	//   kd: add next. Dampens approach speed. Prevents overshoot past target distance.
-	//        Too high → robot feels sluggish, won't reach target
-	//        Too low  → robot overshoots and bounces back and forth
-	//   ki: add LAST, only if robot settles at wrong distance.
-	//        Too high → slow hunting oscillation
-	//        Too low  → steady-state offset from target
-	float kp = 0.03f;   // gentler — 0.5m error → 0.015 rad lean
-	float ki = 0.0f;     // off for now — add once position hold works
-	float kd = 0.0f;     // off for now — sonar too noisy for derivative
-	float target_angle = 0.0f; // Desired angle to return to stabilization.
-	int test_speed;
-	float target_dist;
-	static float theta;
+	// Control variables
+	float target_angle = 0.0f;
+	static float theta = 0.0f;
 	float balance_error;
 	float motor_effort;
 	int final_speed;
 	GPIO_PinState drive_dir;
 
-	static uint32_t prev_time;
+	static uint32_t prev_time = 0;
 	float dt;
-	static float filtered_gyro;
+	static float filtered_gyro = 0.0f;
 	float theta_dot;
 	float pitch_accel;
-	static float balance_integral;
+	static float balance_integral = 0.0f;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -178,13 +153,16 @@ int main(void)
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
   // Starting all necessary timers.
-  HAL_TIM_Base_Start(&htim2); // Ultrasonic sensor Timer
+  HAL_TIM_Base_Start(&htim2); // Microsecond timer (1 MHz = 1μs ticks)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1); // FLM Timer
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2); // FRM Timer
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3); // BLM TImer
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3); // BLM Timer
   HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3); // BRM Timer
   HAL_Delay(1);
 
+  // Initialize IMU — this now:
+  //   1. Writes CTRL1_XL=0x70 (833Hz, ±2g) and CTRL2_G=0x70 (833Hz, ±250dps)
+  //   2. Runs gyro calibration (200 samples, ~400ms, robot must be still)
   IMU_Init(&imu, &hi2c2);
 
   // Initialize theta from accelerometer — retry up to 5 times
@@ -199,7 +177,13 @@ int main(void)
   }
 
   int loop_counter = 0;
-  int debug_counter = 0;
+  //                     ┌───────────────────────────────────────────────────┐
+  //                     │ 500 Hz = 2000 μs per loop                        │
+  //                     │ TIM2 now ticks at 1 μs (prescaler=83, 84MHz APB1)│
+  //                     │ OLD BUG: prescaler was 167 → 2μs ticks           │
+  //                     │   so "2000 counts" was actually 4ms = 250Hz      │
+  //                     │   and dt calc was half actual → broken filter     │
+  //                     └───────────────────────────────────────────────────┘
   const uint32_t LOOP_PERIOD_US = 2000; // 2 ms target → 500 Hz control rate
   /* USER CODE END 2 */
 
@@ -212,55 +196,82 @@ int main(void)
     /* USER CODE BEGIN 3 */
 	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
-	            // ── Measure real dt for the complementary filter ──
-	            dt = (prev_time == 0) ? 0.002f
-	                       : (float)(loop_start - prev_time) * 1e-6f;
-	            if (dt > 0.02f || dt < 0.0005f) dt = 0.002f; // sanity clamp for 500Hz
-	            prev_time = loop_start;
+	  // ── Measure real dt ──
+	  dt = (prev_time == 0) ? 0.002f
+	             : (float)(loop_start - prev_time) * 1e-6f;
+	  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f; // sanity clamp for 500Hz
+	  prev_time = loop_start;
 
-	            // ── 1. READ IMU (blocking) ──
-	            Read_IMU(&imu, &hi2c2);
-	            filtered_gyro = 0.75f * filtered_gyro + 0.25f * imu.gyro.dps_y;
-	            theta_dot = filtered_gyro * (PI_OVER_180);
-	            pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
+	  // ── 1. READ IMU (blocking, ~0.34ms at 400kHz I2C) ──
+	  Read_IMU(&imu, &hi2c2);
 
-	            // ── 2. COMPLEMENTARY FILTER ──
-	            theta = 0.992f * (theta + (theta_dot * dt)) + 0.008f * pitch_accel;
+	  // Apply gyro bias correction (measured during Calibrate_Gyro at startup)
+	  float raw_gyro_y = imu.gyro.dps_y - imu.gyro.bias_y;
 
-	            // ── 3. BALANCE CONTROLLER (LQR-style: angle + rate + velocity) ──
-	            balance_error = theta - target_angle;
+	  // Low-pass filter on gyro (removes high-frequency vibration noise)
+	  filtered_gyro = 0.75f * filtered_gyro + 0.25f * raw_gyro_y;
+	  theta_dot = filtered_gyro * PI_OVER_180;  // convert dps → rad/s
 
-	            balance_integral += balance_error * dt;
-	            if (balance_integral >  1.0f) balance_integral =  1.0f;
-	            if (balance_integral < -1.0f) balance_integral = -1.0f;
+	  // Accelerometer-derived pitch (immune to drift, noisy short-term)
+	  pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
-	            motor_effort = (38.0f * balance_error)
-	                         + (9.0f * theta_dot)
-	                         + (0.3f * balance_integral);
+	  // ── 2. COMPLEMENTARY FILTER ──
+	  // α = τ/(τ+dt). At 500Hz (dt=2ms), τ=0.5s → α≈0.996
+	  // Heavily trusts gyro for fast response, slowly corrects drift with accel.
+	  //
+	  // ┌─────────────────────────────────────────────────────────┐
+	  // │ OLD VALUE 0.992 was for τ≈0.25s — too much accel trust │
+	  // │ Most working projects use 0.995-0.9996                  │
+	  // │ Brokking YABR (the gold standard) uses ~0.9996          │
+	  // └─────────────────────────────────────────────────────────┘
+	  theta = 0.996f * (theta + (theta_dot * dt)) + 0.004f * pitch_accel;
 
-	            // ── 6. ACTUATION ──
-	            if (fabs(motor_effort) < 0.10f) {
-	                final_speed = 0;
-	            } else {
-	                final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
-	            }
-	            if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
+	  // ── 3. BALANCE CONTROLLER (LQR-style: angle + rate + integral) ──
+	  balance_error = theta - target_angle;
 
-	            drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+	  balance_integral += balance_error * dt;
+	  if (balance_integral >  1.0f) balance_integral =  1.0f;
+	  if (balance_integral < -1.0f) balance_integral = -1.0f;
 
-	            HAL_GPIO_WritePin(FLM.directionPort, FLM.directionPin, drive_dir);
-	            HAL_GPIO_WritePin(FRM.directionPort, FRM.directionPin, drive_dir);
-	            HAL_GPIO_WritePin(BLM.directionPort, BLM.directionPin, drive_dir);
-	            HAL_GPIO_WritePin(BRM.directionPort, BRM.directionPin, drive_dir);
-	            TIM1->CCR1 = final_speed;
-	            TIM1->CCR2 = final_speed;
-	            TIM1->CCR3 = final_speed;
-	            TIM8->CCR3 = final_speed;
+	  // ┌─────────────────────────────────────────────────────────────┐
+	  // │ GAIN NOTES after fixing IMU:                                │
+	  // │                                                             │
+	  // │ OLD gyro was 2x too large, so "9.0 * theta_dot" was        │
+	  // │ effectively "18.0 * real_theta_dot". Now gyro is correct.   │
+	  // │                                                             │
+	  // │ OLD dt was 2x too small (TIM2 bug), so balance_integral     │
+	  // │ accumulated at half-speed, and theta integrated at half-rate.│
+	  // │                                                             │
+	  // │ These gains are starting points — RETUNE on hardware:       │
+	  // │   Kp (38): increase until oscillation, back off 20%         │
+	  // │   Kd (9):  increase until oscillation dampens, not sluggish │
+	  // │   Ki (0.3): increase only if steady-state tilt offset       │
+	  // └─────────────────────────────────────────────────────────────┘
+	  motor_effort = (38.0f * balance_error)
+	               + (9.0f  * theta_dot)
+	               + (0.3f  * balance_integral);
 
-	            // printf disabled — ITM_SendChar blocks if SWO FIFO full
+	  // ── 4. ACTUATION ──
+	  if (fabs(motor_effort) < 0.10f) {
+	      final_speed = 0;
+	  } else {
+	      final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
+	  }
+	  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
 
-	            // ── Spin-wait for precise loop period ──
-	            while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
+	  drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+
+	  HAL_GPIO_WritePin(FLM.directionPort, FLM.directionPin, drive_dir);
+	  HAL_GPIO_WritePin(FRM.directionPort, FRM.directionPin, drive_dir);
+	  HAL_GPIO_WritePin(BLM.directionPort, BLM.directionPin, drive_dir);
+	  HAL_GPIO_WritePin(BRM.directionPort, BRM.directionPin, drive_dir);
+	  TIM1->CCR1 = final_speed;
+	  TIM1->CCR2 = final_speed;
+	  TIM1->CCR3 = final_speed;
+	  TIM8->CCR3 = final_speed;
+
+	  // ── Spin-wait for precise loop period ──
+	  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
   }
   /* USER CODE END 3 */
 }
@@ -312,20 +323,10 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief I2C2 Initialization Function
-  * @param None
-  * @retval None
+  * @brief I2C2 Initialization Function — 400 kHz Fast Mode
   */
 static void MX_I2C2_Init(void)
 {
-
-  /* USER CODE BEGIN I2C2_Init 0 */
-
-  /* USER CODE END I2C2_Init 0 */
-
-  /* USER CODE BEGIN I2C2_Init 1 */
-
-  /* USER CODE END I2C2_Init 1 */
   hi2c2.Instance = I2C2;
   hi2c2.Init.ClockSpeed = 400000;
   hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
@@ -339,32 +340,19 @@ static void MX_I2C2_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C2_Init 2 */
-
-  /* USER CODE END I2C2_Init 2 */
-
 }
 
 /**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
+  * @brief TIM1 Initialization Function — PWM for 3 motors (PE9/PE11/PE13)
+  *        APB2 timer clock = 168 MHz. 168M/(31+1)/(255+1) = 20.5 kHz
   */
 static void MX_TIM1_Init(void)
 {
-
-  /* USER CODE BEGIN TIM1_Init 0 */
-
-  /* USER CODE END TIM1_Init 0 */
-
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
-  /* USER CODE BEGIN TIM1_Init 1 */
-
-  /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 31;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
@@ -421,35 +409,33 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM1_Init 2 */
-
-  /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);
-
 }
 
 /**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
+  * @brief TIM2 Initialization Function — Microsecond timer (loop timing + sonar)
+  *        APB1 timer clock = 84 MHz.
+  * ┌─────────────────────────────────────────────────────────────┐
+  * │ CRITICAL FIX: Prescaler changed from 167 → 83              │
+  * │                                                             │
+  * │ OLD: 84MHz/(167+1) = 500kHz = 2μs per tick                 │
+  * │   But ALL code assumed 1μs ticks (* 1e-6f conversions)      │
+  * │   → dt was HALF actual → complementary filter broken        │
+  * │   → loop ran 250Hz not 500Hz                                │
+  * │   → sonar distances 2x too large                            │
+  * │                                                             │
+  * │ NEW: 84MHz/(83+1) = 1MHz = 1μs per tick ← CORRECT          │
+  * └─────────────────────────────────────────────────────────────┘
   */
 static void MX_TIM2_Init(void)
 {
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 167;
+  htim2.Init.Prescaler = 83;  // ← WAS 167. 84MHz/(83+1) = 1MHz = 1μs ticks
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 4294967295;  // 32-bit max → wraps every ~71 minutes
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -467,32 +453,18 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
-
 }
 
 /**
-  * @brief TIM8 Initialization Function
-  * @param None
-  * @retval None
+  * @brief TIM8 Initialization Function — PWM for BRM motor (PC8)
+  *        APB2 timer clock = 168 MHz. 168M/(31+1)/(255+1) = 20.5 kHz
   */
 static void MX_TIM8_Init(void)
 {
-
-  /* USER CODE BEGIN TIM8_Init 0 */
-
-  /* USER CODE END TIM8_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
-  /* USER CODE BEGIN TIM8_Init 1 */
-
-  /* USER CODE END TIM8_Init 1 */
   htim8.Instance = TIM8;
   htim8.Init.Prescaler = 31;
   htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
@@ -500,15 +472,6 @@ static void MX_TIM8_Init(void)
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim8) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim8, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
   if (HAL_TIM_PWM_Init(&htim8) != HAL_OK)
   {
     Error_Handler();
@@ -541,96 +504,7 @@ static void MX_TIM8_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM8_Init 2 */
-
-  /* USER CODE END TIM8_Init 2 */
   HAL_TIM_MspPostInit(&htim8);
-
-}
-
-/**
-  * @brief TIM4 Encoder Mode — PD12 (CH1), PD13 (CH2)
-  */
-static void MX_TIM4_Encoder_Init(void)
-{
-  TIM_Encoder_InitTypeDef sConfig = {0};
-
-  __HAL_RCC_TIM4_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-
-  // Configure PD12, PD13 as TIM4 CH1/CH2 (AF2)
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  GPIO_InitStruct.Pin = GPIO_PIN_12 | GPIO_PIN_13;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-  htim4.Instance = TIM4;
-  htim4.Init.Prescaler = 0;
-  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 65535;
-  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0x0F;  // max hardware filter — rejects noise
-  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0x0F;
-
-  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK) {
-    Error_Handler();
-  }
-  // Start encoder counting
-  HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
-}
-
-/**
-  * @brief TIM5 Encoder Mode — PA0 (CH1), PA1 (CH2)
-  */
-static void MX_TIM5_Encoder_Init(void)
-{
-  TIM_Encoder_InitTypeDef sConfig = {0};
-
-  __HAL_RCC_TIM5_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-
-  // Configure PA0, PA1 as TIM5 CH1/CH2 (AF2)
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM5;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  htim5.Instance = TIM5;
-  htim5.Init.Prescaler = 0;
-  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim5.Init.Period = 0xFFFFFFFF;  // TIM5 is 32-bit
-  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0x0F;
-  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0x0F;
-
-  if (HAL_TIM_Encoder_Init(&htim5, &sConfig) != HAL_OK) {
-    Error_Handler();
-  }
-  HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);
 }
 
 /**
@@ -638,7 +512,6 @@ static void MX_TIM5_Encoder_Init(void)
   */
 static void MX_DMA_Init(void)
 {
-
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
 
@@ -646,20 +519,14 @@ static void MX_DMA_Init(void)
   /* DMA1_Stream2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
-
 }
 
 /**
   * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
   */
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -668,6 +535,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();  // For encoder TIM4 on PD12/PD13
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
@@ -681,7 +549,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(Trig_Front_GPIO_Port, Trig_Front_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PF13 PF14 PF15 */
+  /*Configure GPIO pins : PF13 PF14 PF15 — Motor direction pins */
   GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -695,45 +563,55 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Trig1_Pin */
+  /*Configure GPIO pin : Trig1_Pin (PA9) */
   GPIO_InitStruct.Pin = Trig1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(Trig1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Echo1_Pin */
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ FIX: Echo1 (PA10) changed from IT_RISING → IT_RISING_  │
+  // │ FALLING. With RISING only, the EXTI callback could      │
+  // │ never see the falling edge, so echo_end was never set   │
+  // │ → sonar always returned 0.                              │
+  // └─────────────────────────────────────────────────────────┘
+  /*Configure GPIO pin : Echo1_Pin (PA10) */
   GPIO_InitStruct.Pin = Echo1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Echo1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Trig_Front_Pin */
+  /*Configure GPIO pin : Trig_Front_Pin (PC10) */
   GPIO_InitStruct.Pin = Trig_Front_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(Trig_Front_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Echo_Front_Pin */
+  /*Configure GPIO pin : Echo_Front_Pin (PC11) */
   GPIO_InitStruct.Pin = Echo_Front_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Echo_Front_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Echo2_Pin */
+  /*Configure GPIO pin : Echo2_Pin (PG9) */
   GPIO_InitStruct.Pin = Echo2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Echo2_GPIO_Port, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  /* EXTI interrupt init */
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 1, 0);  // Priority 1 (below DMA/I2C)
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ FIX: Enable EXTI9_5 IRQ — Echo2 is on PG9 (EXTI line 9)│
+  // │ Without this, the left sensor echo interrupts were       │
+  // │ silently dropped and leftSensor always returned 0.       │
+  // └─────────────────────────────────────────────────────────┘
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
 
 /* USER CODE BEGIN 4 */
@@ -757,33 +635,27 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	// Trigger if front Sensor
 	if (GPIO_Pin == frontSensor.EchoPin){
 		if (HAL_GPIO_ReadPin(frontSensor.EchoPort, frontSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
 			frontSensor.echo_start = __HAL_TIM_GET_COUNTER(frontSensor.timer);
 		}
 		else{
-			// Record Time at Echo End
 			frontSensor.echo_end = __HAL_TIM_GET_COUNTER(frontSensor.timer);
 		}
 	}
 	// Trigger if left Sensor
 	if (GPIO_Pin == leftSensor.EchoPin){
 		if (HAL_GPIO_ReadPin(leftSensor.EchoPort, leftSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
 			leftSensor.echo_start = __HAL_TIM_GET_COUNTER(leftSensor.timer);
 		}
 		else{
-			// Record Time at Echo End
 			leftSensor.echo_end = __HAL_TIM_GET_COUNTER(leftSensor.timer);
 		}
 	}
 	// Trigger if right Sensor
 	if (GPIO_Pin == rightSensor.EchoPin){
 		if (HAL_GPIO_ReadPin(rightSensor.EchoPort, rightSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
 			rightSensor.echo_start = __HAL_TIM_GET_COUNTER(rightSensor.timer);
 		}
 		else{
-			// Record Time at Echo End
 			rightSensor.echo_end = __HAL_TIM_GET_COUNTER(rightSensor.timer);
 		}
 	}
@@ -818,18 +690,7 @@ void Error_Handler(void)
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
