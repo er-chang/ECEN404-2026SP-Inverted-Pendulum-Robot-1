@@ -225,6 +225,7 @@ int main(void)
 	  setSpeed(&BLM, 256, GPIO_PIN_RESET);
 
 	  HAL_Delay(500);
+	  HAL_Delay(10);
   }
   /* USER CODE END 3 */
 }
