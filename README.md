@@ -1,4 +1,3 @@
-# Inverted-Pendulum-Robot-1
-# This is the repository for the CAPSTONE project stated above.
-# This is where all code and project files should go.
-# Try to backup your files to this repository once a week.
+## Web Interface
+
+This branch implements the ESP32 wireless communication module that enables data exchange between the web interface and the MCU.
