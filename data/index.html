@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <!--specify display mode-->
+
+    <!--include fonts-->
+    <!-- <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cascadia+Code:ital,wght@0,200..700;1,200..700&display=swap" rel="stylesheet"> -->
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Victor+Mono:ital,wght@0,100..700;1,100..700&display=swap"
+      rel="stylesheet"
+    />
+
+    <title>Inverted Pendulum Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+    <!--include/reference CSS file-->
+  </head>
+  <body>
+    <!-- <a href="control-panel.html">Control Panel >></a> -->
+    <header>
+      <div class="header-top">
+        <h1>INVERTED PENDULUM DIAGNOSTICS</h1>
+        <!-- <span class="indicator --online"></span> -->
+        <!-- <span class="indicator --error"></span> -->
+        <span class="indicator --idle"></span>
+      </div>
+      <h3>MONITORING AND ADJUSTING SYSTEM VARIABLES.</h3>
+    </header>
+
+    <!--monitoring data-->
+    <div class="container">
+      <!-- system data -->
+      <div class="item item-1">
+        <h4>
+          >> CONFIG.
+          <!-- Stable/Oscillating/Unstable -->
+        </h4>
+        <div class="button-container">
+          <button id="armBtn" class="button-40 btn-arm" role="button">
+            ARM MOTORS
+          </button>
+
+          <button id="rebootBtn" class="button-40 btn-reboot" role="button">
+            REBOOT STM32
+          </button>
+
+          <button id="estopBtn" class="button-40 btn-estop" role="button">
+            EMERGENCY STOP
+          </button>
+        </div>
+      </div>
+      <div class="item item-2">
+        <h4>
+          >> DYNAMICS & STABILITY
+          <span id="distanceVal" style="margin-left: 10px; font-weight: 600"
+            >-- cm</span
+          >
+        </h4>
+        <ul class="data-list">
+          <li>pitch angle (&theta;)<b id="pitchVal"> 0.00°</b></li>
+          <!--°-->
+          <li>ang. velocity<b id="velVal"> 0.0 rad/s</b></li>
+          <!-- percentage represents duty cycle sent to motor drivers -->
+          <li>pid output<b id="pidVal"> -- </b></li>
+          <li>setpoint error<b id="errorVal"> 0.0°</b></li>
+          <!-- m/s&sup3 -->
+          <li>jerk<b id="jerkVal">-- ;</b></li>
+        </ul>
+      </div>
+      <div class="item item-3">
+        <h4>
+          >> NAVIGATION & MOTION
+          <!-- Angular Velocity
+            Acceleration    -->
+        </h4>
+        <ul class="data-list">
+          <li class="group-header">DISTANCE SENSING</li>
+          <li class="sub-item">&#x21B3; l-dist. <b id="lDistVal">-- </b></li>
+          <li class="sub-item">&#x21B3; f-dist. <b id="fDistVal">0.00 m</b></li>
+          <li class="sub-item">&#x21B3; r-dist. <b id="rDistVal">-- </b></li>
+          <!--x and y coordinates-->
+          <li>odometry<b id="odomVal">-- </b></li>
+          <!-- distance to wall -->
+          <li>wheel rpm<b id="rpmVal">-- </b></li>
+
+          <li>total dist.<b id="total_dist_Val">-- </b></li>
+        </ul>
+      </div>
+      <div class="item item-4">
+        <h4>>> SYS. INTEGRITY</h4>
+        <ul class="data-list">
+          <li>battery voltage<b id="batteryVal"> -- V</b></li>
+          <!--°-->
+          <li>cpu load<b id="cpuVal"> --</b></li>
+          <li>wifi latency<b id="latencyVal"> 0.0 ms</b></li>
+        </ul>
+      </div>
+
+      <!-- <div class="item item-5"><h4>>> TEMPERATURE</h4></div> -->
+      <div class="item item-6"><h4>>> CONSOLE</h4></div>
+    </div>
+
+    <div class="container2">
+      <!-- visualization plots -->
+      <div class="item item-7">graph1</div>
+      <div class="item item-8">graph2</div>
+    </div>
+
+    <!--include/reference JavaScript file-->
+    <script src="index.js"></script>
+  </body>
+</html>
