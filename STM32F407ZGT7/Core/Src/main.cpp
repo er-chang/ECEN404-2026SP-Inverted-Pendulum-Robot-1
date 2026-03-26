@@ -217,18 +217,18 @@ int main(void)
 	  // ── 3. PD CONTROLLER (Ziegler-Nichols tuned) ──
 	  // Ku≈38, Tu≈1.0s → Kp=0.8*Ku=30, Kd=Kp*Tu/8=3.75
 	  // Heavy top mass (1.5kg at 60cm, I=0.103 kg·m²) needs strong damping
-	  // Ki: accumulate raw theta samples (no dt scaling)
-	  balance_integral += theta;
+	  // Sliding window integral — keeps last N samples, old ones drop off
+	  // At 200Hz: 200 samples = 1 second of history
+	  #define WINDOW_SIZE 200
+	  static float window[WINDOW_SIZE] = {0};
+	  static int window_idx = 0;
 
-	  // Anti-windup: decay every 300 samples to prevent saturation lock
-	  static int windup_counter = 0;
-	  windup_counter++;
-	  if (windup_counter >= 300) {
-	      balance_integral *= 0.5f;
-	      windup_counter = 0;
-	  }
+	  balance_integral -= window[window_idx];  // remove oldest sample
+	  window[window_idx] = theta;              // store new sample
+	  balance_integral += theta;               // add new sample
+	  window_idx = (window_idx + 1) % WINDOW_SIZE;
 
-	  // PI controller — Ki gain is small because integral grows fast
+	  // PI controller
 	  motor_effort = (38.0f * theta)
 	               + (0.05f * balance_integral);
 
