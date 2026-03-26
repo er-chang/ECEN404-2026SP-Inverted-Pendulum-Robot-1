@@ -226,7 +226,7 @@ int main(void)
 	  static int windup_counter = 0;
 	  windup_counter++;
 	  if (windup_counter >= 300) {
-	      balance_integral *= 0.5f;  // halve it instead of hard reset
+	      balance_integral *= 0.5f;
 	      windup_counter = 0;
 	  }
 
