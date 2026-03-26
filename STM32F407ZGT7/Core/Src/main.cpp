@@ -202,6 +202,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
+
+	  // ── Measure REAL dt — not hardcoded ──
+	  dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
+	  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
+	  prev_time = loop_start;
+
 	  // ── 1. READ IMU ──
 	  Read_IMU(&imu, &hi2c2);
 
@@ -209,31 +216,24 @@ int main(void)
 	  theta_dot = (imu.gyro.dps_y - imu.gyro.bias_y) * PI_OVER_180;
 	  pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
-	  // ── 2. COMPLEMENTARY FILTER — 70% gyro, 30% accel ──
-	  // Fast enough to respond (converges in ~3 loops = 15ms)
-	  // Smooth enough to kill motor vibration noise from accel
-	  theta = 0.85f * (theta + (theta_dot * 0.005f)) + 0.15f * pitch_accel;
+	  // ── 2. COMPLEMENTARY FILTER — uses measured dt, not hardcoded ──
+	  theta = 0.70f * (theta + (theta_dot * dt)) + 0.30f * pitch_accel;
 
-	  // ── 3. PI CONTROLLER + PREDICTIVE THETA ──
-	  // Predict where theta will be in 50ms using theta_dot
-	  // This gives speed awareness without an explicit Kd term
-	  float theta_predicted = theta + 0.05f * theta_dot;
-
+	  // ── 3. PI CONTROLLER ──
 	  // Sliding window integral — keeps last N samples, old ones drop off
 	  #define WINDOW_SIZE 50
 	  static float window[WINDOW_SIZE] = {0};
 	  static int window_idx = 0;
 
-	  balance_integral -= window[window_idx];  // remove oldest
-	  window[window_idx] = theta;              // store new
-	  balance_integral += theta;               // add new
+	  balance_integral -= window[window_idx];
+	  window[window_idx] = theta;
+	  balance_integral += theta;
 	  window_idx = (window_idx + 1) % WINDOW_SIZE;
 
-	  // PI controller using predicted theta for Kp
-	  motor_effort = (60.0f * theta_predicted)
+	  motor_effort = (60.0f * theta)
 	               + (0.05f * balance_integral);
 
-	  // ── 4. ACTUATION — match the accel test: scale * |effort| + deadzone ──
+	  // ── 4. ACTUATION ──
 	  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
 	  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
 	  if (fabs(motor_effort) < 0.01f) final_speed = 0;
@@ -245,7 +245,8 @@ int main(void)
 	  setSpeed(&BLM, final_speed, drive_dir);
 	  setSpeed(&BRM, final_speed, drive_dir);
 
-	  HAL_Delay(5);
+	  // ── Spin-wait for exact 2ms loop period (500Hz, no jitter) ──
+	  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < 2000);
   }
   /* USER CODE END 3 */
 }
