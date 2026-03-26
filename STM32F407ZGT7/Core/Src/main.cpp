@@ -217,12 +217,10 @@ int main(void)
 	  // ── 3. PD CONTROLLER (Ziegler-Nichols tuned) ──
 	  // Ku≈38, Tu≈1.0s → Kp=0.8*Ku=30, Kd=Kp*Tu/8=3.75
 	  // Heavy top mass (1.5kg at 60cm, I=0.103 kg·m²) needs strong damping
-	  balance_integral += theta * 0.005f;  // accumulate error * dt
-	  if (balance_integral >  0.5f) balance_integral =  0.5f;
-	  if (balance_integral < -0.5f) balance_integral = -0.5f;
+	  // Ki: accumulate raw theta samples (no dt scaling)
+	  balance_integral += theta;
 
-	  // Anti-windup: decay integral every 300 samples (~1.5s at 200Hz)
-	  // Prevents integral from sitting at saturation and causing overshoot
+	  // Anti-windup: decay every 300 samples to prevent saturation lock
 	  static int windup_counter = 0;
 	  windup_counter++;
 	  if (windup_counter >= 300) {
@@ -230,8 +228,9 @@ int main(void)
 	      windup_counter = 0;
 	  }
 
+	  // PI controller — Ki gain is small because integral grows fast
 	  motor_effort = (38.0f * theta)
-	               + (2.0f * balance_integral);
+	               + (0.05f * balance_integral);
 
 	  // ── 4. ACTUATION — match the accel test: scale * |effort| + deadzone ──
 	  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
