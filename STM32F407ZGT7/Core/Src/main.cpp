@@ -35,7 +35,7 @@
 /* USER CODE BEGIN PD */
 #define MAX_SPEED 256
 #define MIN_SPEED 0
-#define PWM_DEADZONE 22        // Minimum PWM to overcome motor static friction
+#define PWM_DEADZONE 23
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -216,8 +216,22 @@ int main(void)
 
 	  // ── 3. PD CONTROLLER (Ziegler-Nichols tuned) ──
 	  // Ku≈38, Tu≈1.0s → Kp=0.8*Ku=30, Kd=Kp*Tu/8=3.75
+	  // Heavy top mass (1.5kg at 60cm, I=0.103 kg·m²) needs strong damping
+	  balance_integral += theta * 0.005f;  // accumulate error * dt
+	  if (balance_integral >  0.5f) balance_integral =  0.5f;
+	  if (balance_integral < -0.5f) balance_integral = -0.5f;
+
+	  // Anti-windup: decay integral every 300 samples (~1.5s at 200Hz)
+	  // Prevents integral from sitting at saturation and causing overshoot
+	  static int windup_counter = 0;
+	  windup_counter++;
+	  if (windup_counter >= 300) {
+	      balance_integral *= 0.5f;  // halve it instead of hard reset
+	      windup_counter = 0;
+	  }
+
 	  motor_effort = (38.0f * theta)
-	               + (4.0f * theta_dot);
+	               + (2.0f * balance_integral);
 
 	  // ── 4. ACTUATION — match the accel test: scale * |effort| + deadzone ──
 	  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
