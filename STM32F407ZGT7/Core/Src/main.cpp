@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <peripherals.h> // Where most peripheral functions are stored
+#include <potentiometer.h> // Angle sensor via ADC3
 #include <stdio.h>
 #include <math.h>
 /* USER CODE END Includes */
@@ -35,7 +36,7 @@
 /* USER CODE BEGIN PD */
 #define MAX_SPEED 256
 #define MIN_SPEED 0
-#define PWM_DEADZONE 23
+#define PWM_DEADZONE 17
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,6 +47,7 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c2;
 DMA_HandleTypeDef hdma_i2c2_rx;
+ADC_HandleTypeDef hadc3;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
@@ -97,6 +99,7 @@ static void MX_TIM2_Init(void);
 static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 int _write(int32_t file, uint8_t *ptr, int32_t len);
+static void MX_ADC3_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -168,26 +171,18 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM8_Init();
+  MX_ADC3_Init();
   /* USER CODE BEGIN 2 */
-  // Starting all necessary timers.
-  HAL_TIM_Base_Start(&htim2); // Ultrasonic sensor Timer
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1); // FLM Timer
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2); // FRM Timer
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3); // BLM TImer
-  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3); // BRM Timer
-  HAL_Delay(1);
+  HAL_TIM_Base_Start(&htim2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
+  HAL_Delay(100);
 
-  IMU_Init(&imu, &hi2c2);
-
+  // Calibrate pot center — hold pendulum vertical during startup
+  uint16_t pot_center = Pot_Calibrate_Center(100);
   theta = 0.0f;
-  for (int attempt = 0; attempt < 5; attempt++) {
-      Read_IMU(&imu, &hi2c2);
-      if (imu.status == HAL_OK) {
-          theta = atan2(imu.accel.g_z, -imu.accel.g_x);
-          break;
-      }
-      HAL_Delay(10);
-  }
 
   const uint32_t LOOP_PERIOD_US = 2000; // 2ms = 500Hz
   while (1)
@@ -202,15 +197,18 @@ int main(void)
 	  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
 	  prev_time = loop_start;
 
-	  // ── 1. READ IMU ──
-	  Read_IMU(&imu, &hi2c2);
+	  // ── 1. READ POTENTIOMETER (~2µs, no I2C, no filter needed) ──
+	  static float prev_theta = 0.0f;
+	  HAL_ADC_Start(&hadc3);
+	  HAL_ADC_PollForConversion(&hadc3, 1);
+	  uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
 
-	  // Raw gyro — zero lag
-	  theta_dot = (imu.gyro.dps_y - imu.gyro.bias_y) * PI_OVER_180;
-	  pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
+	  // Convert to radians: centered on calibrated zero
+	  theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
 
-	  // ── 2. COMPLEMENTARY FILTER — uses measured dt ──
-	  theta = 0.70f * (theta + (theta_dot * dt)) + 0.30f * pitch_accel;
+	  // Compute angular velocity from angle difference (numerical derivative)
+	  theta_dot = (theta - prev_theta) / dt;
+	  prev_theta = theta;
 
 	  // ── 3. PI CONTROLLER ──
 	  #define WINDOW_SIZE 50
@@ -540,6 +538,44 @@ static void MX_DMA_Init(void)
   HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
 
+}
+
+/**
+  * @brief ADC3 Init — 10-bit, single conversion for potentiometer
+  */
+static void MX_ADC3_Init(void)
+{
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  __HAL_RCC_ADC3_CLK_ENABLE();
+
+  hadc3.Instance = ADC3;
+  hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;  // 84MHz/4 = 21MHz
+  hadc3.Init.Resolution = ADC_RESOLUTION_10B;              // 10-bit (0-1023)
+  hadc3.Init.ScanConvMode = DISABLE;
+  hadc3.Init.ContinuousConvMode = DISABLE;                 // single conversion
+  hadc3.Init.DiscontinuousConvMode = DISABLE;
+  hadc3.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc3.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc3.Init.NbrOfConversion = 1;
+  hadc3.Init.DMAContinuousRequests = DISABLE;
+  hadc3.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Configure the ADC channel — CHANGE THIS to match your pin
+  // PF3=ADC3_CH9, PF4=ADC3_CH14, PF5=ADC3_CH15, etc.
+  // Check CubeMX for which pin you assigned
+  sConfig.Channel = ADC_CHANNEL_9;  // ← UPDATE to your actual channel
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_56CYCLES;  // ~2.7µs conversion
+  if (HAL_ADC_ConfigChannel(&hadc3, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /**
