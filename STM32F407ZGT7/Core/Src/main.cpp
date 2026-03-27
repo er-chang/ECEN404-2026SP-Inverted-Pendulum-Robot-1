@@ -179,7 +179,6 @@ int main(void)
 
   IMU_Init(&imu, &hi2c2);
 
-  // Initialize theta from accelerometer — retry up to 5 times
   theta = 0.0f;
   for (int attempt = 0; attempt < 5; attempt++) {
       Read_IMU(&imu, &hi2c2);
@@ -190,13 +189,7 @@ int main(void)
       HAL_Delay(10);
   }
 
-  int loop_counter = 0;
-  int debug_counter = 0;
-  const uint32_t LOOP_PERIOD_US = 5000; // 5 ms target → 200 Hz control rate
-  /* USER CODE END 2 */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
+  const uint32_t LOOP_PERIOD_US = 2000; // 2ms = 500Hz
   while (1)
   {
     /* USER CODE END WHILE */
@@ -204,7 +197,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
 	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
-	  // ── Measure REAL dt — not hardcoded ──
+	  // ── Measure REAL dt ──
 	  dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
 	  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
 	  prev_time = loop_start;
@@ -216,11 +209,10 @@ int main(void)
 	  theta_dot = (imu.gyro.dps_y - imu.gyro.bias_y) * PI_OVER_180;
 	  pitch_accel = atan2(imu.accel.g_z, -imu.accel.g_x);
 
-	  // ── 2. COMPLEMENTARY FILTER — uses measured dt, not hardcoded ──
+	  // ── 2. COMPLEMENTARY FILTER — uses measured dt ──
 	  theta = 0.70f * (theta + (theta_dot * dt)) + 0.30f * pitch_accel;
 
 	  // ── 3. PI CONTROLLER ──
-	  // Sliding window integral — keeps last N samples, old ones drop off
 	  #define WINDOW_SIZE 50
 	  static float window[WINDOW_SIZE] = {0};
 	  static int window_idx = 0;
@@ -245,8 +237,8 @@ int main(void)
 	  setSpeed(&BLM, final_speed, drive_dir);
 	  setSpeed(&BRM, final_speed, drive_dir);
 
-	  // ── Spin-wait for exact 2ms loop period (500Hz, no jitter) ──
-	  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < 2000);
+	  // ── Spin-wait for exact 2ms loop period (500Hz) ──
+	  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
   }
   /* USER CODE END 3 */
 }
