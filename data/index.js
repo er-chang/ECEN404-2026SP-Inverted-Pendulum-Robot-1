@@ -12,13 +12,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const latencyVal = document.getElementById("latencyVal");
 
   const playStopBtn = document.getElementById("playStopBtn");
-  const playStopText = document.getElementById("playStopText"); // Note: Safe even if null
+  const playStopText = document.getElementById("playStopText");
 
   const webcamFeed = document.getElementById("webcamFeed");
+
+  // --- 2. Recording & Logging Variables ---
   let mediaRecorder;
   let recordedChunks = [];
+  let isLoggingData = false;
+  let telemetryLog = [];
+  let recordingStartTime = 0;
 
-  // --- 2. WebSocket Setup ---
+  // --- 3. WebSocket Setup ---
   const gateway = `ws://${window.location.hostname}/ws`;
   let websocket = null;
   let reconnectTimer = null;
@@ -45,7 +50,6 @@ document.addEventListener("DOMContentLoaded", () => {
       console.warn(`WebSocket not open. Could not send command: ${command}`);
       return;
     }
-
     websocket.send(JSON.stringify({ command }));
   }
 
@@ -83,7 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
     websocket.onmessage = (event) => {
       const now = performance.now();
 
-      // This is message interval, not true network latency
+      // Track rough message interval
       if (latencyVal && lastMessageTime !== 0) {
         latencyVal.textContent = `${(now - lastMessageTime).toFixed(1)} ms`;
       }
@@ -92,20 +96,37 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const data = JSON.parse(event.data);
 
+        // Update UI
         if (typeof data.pitch === "number") {
           pitchVal.innerHTML = `${data.pitch.toFixed(2)}&deg;`;
         }
-
         if (typeof data.angular_velocity === "number") {
           safeSetText(velVal, `${data.angular_velocity.toFixed(2)} deg/s`);
         }
-
         if (typeof data.setpoint_error === "number") {
           errorVal.innerHTML = `${data.setpoint_error.toFixed(2)}&deg;`;
         }
-
         if (typeof data.front_distance === "number") {
           safeSetText(fDistVal, `${data.front_distance.toFixed(2)} m`);
+        }
+
+        // --- DATA LOGGING ---
+        // If recording is active and we have data, push it to the spreadsheet array
+        if (isLoggingData && typeof data.pitch === "number") {
+          const elapsedMs = (performance.now() - recordingStartTime).toFixed(0);
+
+          // Safe fallbacks in case a specific value is missing from the JSON
+          const vPitch = data.pitch.toFixed(2);
+          const vVel =
+            typeof data.angular_velocity === "number"
+              ? data.angular_velocity.toFixed(2)
+              : "0.00";
+          const vErr =
+            typeof data.setpoint_error === "number"
+              ? data.setpoint_error.toFixed(2)
+              : "0.00";
+
+          telemetryLog.push([elapsedMs, vPitch, vVel, vErr]);
         }
       } catch (e) {
         console.error("Error parsing WebSocket JSON:", e, event.data);
@@ -113,7 +134,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
   }
 
-  // --- 3. Webcam & Recording Setup ---
+  // --- 4. Webcam Setup ---
   async function initCamera() {
     try {
       // Request access to the user's webcam
@@ -146,11 +167,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Generate a filename with a timestamp
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-        a.download = `pendulum_test_${timestamp}.webm`;
+        a.download = `pendulum_video_${timestamp}.webm`;
 
         a.click();
         window.URL.revokeObjectURL(url);
         a.remove();
+        console.log("Video saved to disk.");
       };
 
       console.log("Webcam initialized successfully.");
@@ -162,10 +184,34 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // --- 5. CSV Export Helper ---
+  function saveTelemetryCSV() {
+    if (telemetryLog.length <= 1) return; // Don't save if there's no data besides headers
+
+    // Convert the 2D array into a CSV string
+    let csvContent =
+      "data:text/csv;charset=utf-8," +
+      telemetryLog.map((row) => row.join(",")).join("\n");
+
+    // Create a hidden download link
+    const encodedUri = encodeURI(csvContent);
+    const a = document.createElement("a");
+    a.setAttribute("href", encodedUri);
+
+    // Name the file with a timestamp to match the video
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    a.setAttribute("download", `pendulum_data_${timestamp}.csv`);
+
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    console.log("Telemetry CSV saved to disk.");
+  }
+
   // Initialize camera when page loads
   initCamera();
 
-  // --- 4. Button Logic ---
+  // --- 6. Button Logic ---
   if (armBtn) {
     armBtn.addEventListener("click", () => {
       const isArmed = armBtn.classList.contains("is-armed");
@@ -185,12 +231,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (estopBtn) {
     estopBtn.addEventListener("click", () => {
       sendCommand("estop");
-
       if (armBtn) {
         armBtn.classList.remove("is-armed");
         armBtn.innerText = "ARM MOTORS";
       }
-
       alert("!! EMERGENCY STOP TRIGGERED !!");
     });
   }
@@ -219,22 +263,36 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (isRecording) {
-        // START RECORDING
+        // --- START EVERYTHING ---
+        // 1. Start Video
         if (mediaRecorder && mediaRecorder.state === "inactive") {
           recordedChunks = [];
           mediaRecorder.start();
-          console.log("Recording started...");
+          console.log("Video recording started...");
         }
+
+        // 2. Start Data Logging
+        isLoggingData = true;
+        recordingStartTime = performance.now();
+        // Setup the CSV headers
+        telemetryLog = [
+          ["Time (ms)", "Pitch (deg)", "Velocity (deg/s)", "Error (deg)"],
+        ];
+        console.log("Data logging started...");
       } else {
-        // STOP RECORDING
+        // --- STOP EVERYTHING ---
+        // 1. Stop Video (this triggers the download automatically via onstop)
         if (mediaRecorder && mediaRecorder.state === "recording") {
-          mediaRecorder.stop(); // This triggers the onstop event to save the file
-          console.log("Recording stopped and saving to disk...");
+          mediaRecorder.stop();
         }
+
+        // 2. Stop Data Logging & Download CSV
+        isLoggingData = false;
+        saveTelemetryCSV();
       }
     });
   }
 
-  // --- 5. Start connection ---
+  // --- 7. Start connection ---
   initWebSocket();
 });
