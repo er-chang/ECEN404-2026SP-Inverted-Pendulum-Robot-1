@@ -93,6 +93,8 @@ typedef struct __attribute__((packed)) {
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc3;
+DMA_HandleTypeDef hdma_adc3;
+volatile uint16_t pot_dma_value = 0;  // DMA writes here continuously
 
 I2C_HandleTypeDef hi2c2;
 
@@ -337,22 +339,15 @@ int main(void)
 
 	// Average 100 readings to find the ADC value at vertical
 
+	// Start ADC3 with DMA — runs forever in background, zero CPU time
+	HAL_ADC_Start_DMA(&hadc3, (uint32_t*)&pot_dma_value, 1);
+
+	// Calibrate: average 100 DMA readings for pot center
 	uint32_t pot_sum = 0;
-
 	for (int i = 0; i < 100; i++) {
-
-	HAL_ADC_Start(&hadc3);
-
-	HAL_ADC_PollForConversion(&hadc3, 1);
-
-	pot_sum += HAL_ADC_GetValue(&hadc3);
-
-	HAL_ADC_Stop(&hadc3);
-
-	HAL_Delay(2);
-
+		HAL_Delay(2);
+		pot_sum += pot_dma_value;
 	}
-
 	uint16_t pot_center = (uint16_t)(pot_sum / 100);
 
 
@@ -396,15 +391,8 @@ int main(void)
 
 
 
-	// ── 1. READ POTENTIOMETER (~5µs, zero lag, no filter needed) ──
-
-	HAL_ADC_Start(&hadc3);
-
-	HAL_ADC_PollForConversion(&hadc3, 1);
-
-	uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
-
-	HAL_ADC_Stop(&hadc3);
+	// ── 1. READ POTENTIOMETER (DMA — 0µs CPU time, always fresh) ──
+	uint16_t pot_raw = pot_dma_value;  // just read the variable, DMA updates it
 
 
 
@@ -495,15 +483,15 @@ int main(void)
 
 
 
-	// Transmit to ESP32 (Non-blocking 1ms timeout so it doesn't break your 2ms loop)
-
-	HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
-
-	// NOTE: Change &hspi1 to whatever SPI port you enabled in the .ioc
-
-	HAL_StatusTypeDef spi_status = HAL_SPI_TransmitReceive(&hspi1, (uint8_t *)&tx, (uint8_t *)&rx, 16, 1);
-
-	HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
+	// Send telemetry every 5th loop (~100Hz) to not slow down 500Hz control
+	static uint8_t spi_counter = 0;
+	HAL_StatusTypeDef spi_status = HAL_ERROR;
+	if (++spi_counter >= 5) {
+		spi_counter = 0;
+		HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
+		spi_status = HAL_SPI_TransmitReceive(&hspi1, (uint8_t *)&tx, (uint8_t *)&rx, 16, 1);
+		HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
+	}
 
 
 
@@ -626,13 +614,13 @@ static void MX_ADC3_Init(void)
   hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc3.Init.Resolution = ADC_RESOLUTION_12B;
   hadc3.Init.ScanConvMode = ADC_SCAN_DISABLE;
-  hadc3.Init.ContinuousConvMode = DISABLE;
+  hadc3.Init.ContinuousConvMode = ENABLE;   // Convert continuously
   hadc3.Init.DiscontinuousConvMode = DISABLE;
   hadc3.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc3.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc3.Init.NbrOfConversion = 1;
-  hadc3.Init.DMAContinuousRequests = DISABLE;
+  hadc3.Init.DMAContinuousRequests = ENABLE; // DMA keeps running
   hadc3.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   if (HAL_ADC_Init(&hadc3) != HAL_OK)
   {
@@ -649,8 +637,22 @@ static void MX_ADC3_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN ADC3_Init 2 */
-
-
+  // Configure DMA for ADC3: DMA2 Stream 0, Channel 2
+  __HAL_RCC_DMA2_CLK_ENABLE();
+  hdma_adc3.Instance = DMA2_Stream0;
+  hdma_adc3.Init.Channel = DMA_CHANNEL_2;
+  hdma_adc3.Init.Direction = DMA_PERIPH_TO_MEMORY;
+  hdma_adc3.Init.PeriphInc = DMA_PINC_DISABLE;
+  hdma_adc3.Init.MemInc = DMA_MINC_DISABLE;       // Single variable, no increment
+  hdma_adc3.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
+  hdma_adc3.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+  hdma_adc3.Init.Mode = DMA_CIRCULAR;              // Keeps running forever
+  hdma_adc3.Init.Priority = DMA_PRIORITY_HIGH;
+  hdma_adc3.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+  if (HAL_DMA_Init(&hdma_adc3) != HAL_OK) {
+    Error_Handler();
+  }
+  __HAL_LINKDMA(&hadc3, DMA_Handle, hdma_adc3);
 
   /* USER CODE END ADC3_Init 2 */
 
