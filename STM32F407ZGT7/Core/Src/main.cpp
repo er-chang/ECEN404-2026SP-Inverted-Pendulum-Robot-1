@@ -254,14 +254,14 @@ int main(void)
 
 		// Average 100 readings to find the ADC value at vertical
 
-		// Start ADC3 with DMA — runs forever in background, zero CPU time
-		HAL_ADC_Start_DMA(&hadc3, (uint32_t*)&pot_dma_value, 1);
-
-		// Calibrate: average 100 DMA readings for pot center
+		// Calibrate pot center — blocking reads (simple, works)
 		uint32_t pot_sum = 0;
 		for (int i = 0; i < 100; i++) {
+			HAL_ADC_Start(&hadc3);
+			HAL_ADC_PollForConversion(&hadc3, 1);
+			pot_sum += HAL_ADC_GetValue(&hadc3);
+			HAL_ADC_Stop(&hadc3);
 			HAL_Delay(2);
-			pot_sum += pot_dma_value;
 		}
 		uint16_t pot_center = (uint16_t)(pot_sum / 100);
 
@@ -306,8 +306,11 @@ int main(void)
 
 
 
-		// ── 1. READ POTENTIOMETER (DMA — 0µs CPU time, always fresh) ──
-		uint16_t pot_raw = pot_dma_value;  // just read the variable, DMA updates it
+		// ── 1. READ POTENTIOMETER (~5µs blocking) ──
+		HAL_ADC_Start(&hadc3);
+		HAL_ADC_PollForConversion(&hadc3, 1);
+		uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
+		HAL_ADC_Stop(&hadc3);
 
 
 
@@ -514,13 +517,13 @@ static void MX_ADC3_Init(void)
   hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc3.Init.Resolution = ADC_RESOLUTION_12B;
   hadc3.Init.ScanConvMode = ADC_SCAN_DISABLE;
-  hadc3.Init.ContinuousConvMode = ENABLE;
+  hadc3.Init.ContinuousConvMode = DISABLE;
   hadc3.Init.DiscontinuousConvMode = DISABLE;
   hadc3.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc3.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc3.Init.NbrOfConversion = 1;
-  hadc3.Init.DMAContinuousRequests = ENABLE;
+  hadc3.Init.DMAContinuousRequests = DISABLE;
   hadc3.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   if (HAL_ADC_Init(&hadc3) != HAL_OK)
   {
