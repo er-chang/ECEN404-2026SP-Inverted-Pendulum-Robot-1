@@ -381,7 +381,7 @@ int main(void)
 
 
 
-		  #define WINDOW_SIZE 25
+		  #define WINDOW_SIZE 10
 
 		  static float window[WINDOW_SIZE] = {0};
 
@@ -399,7 +399,8 @@ int main(void)
 
 
 		  motor_effort = (65.0f * theta)
-		               + (0.1f * balance_integral);
+		               + (3.0f * theta_dot)
+		               + (0.02f * balance_integral);
 
 
 
