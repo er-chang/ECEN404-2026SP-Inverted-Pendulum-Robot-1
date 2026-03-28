@@ -183,15 +183,14 @@ int main(void)
   HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
   HAL_Delay(100);
 
-  // Start ADC3 in continuous mode
-  HAL_ADC_Start(&hadc3);
-
   // Calibrate pot center — hold pendulum vertical during this!
   // Average 100 readings to find the ADC value at vertical
   uint32_t pot_sum = 0;
   for (int i = 0; i < 100; i++) {
+      HAL_ADC_Start(&hadc3);
       HAL_ADC_PollForConversion(&hadc3, 1);
       pot_sum += HAL_ADC_GetValue(&hadc3);
+      HAL_ADC_Stop(&hadc3);
       HAL_Delay(2);
   }
   uint16_t pot_center = (uint16_t)(pot_sum / 100);
@@ -218,9 +217,11 @@ int main(void)
 	  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
 	  prev_time = loop_start;
 
-	  // ── 1. READ POTENTIOMETER (~2µs, zero lag, no filter needed) ──
+	  // ── 1. READ POTENTIOMETER (~5µs, zero lag, no filter needed) ──
+	  HAL_ADC_Start(&hadc3);
 	  HAL_ADC_PollForConversion(&hadc3, 1);
 	  uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
+	  HAL_ADC_Stop(&hadc3);
 
 	  static float prev_theta = 0.0f;
 	  theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
