@@ -367,24 +367,10 @@ int main(void)
 
 
 
-		// Auto-arm after 3 seconds, web UI can still disarm/estop
-		static uint8_t auto_armed = 0;
-		if (!auto_armed && (__HAL_TIM_GET_COUNTER(&htim2) > 3000000)) {
-			auto_armed = 1;
-			system_state = 1;
-		}
-
-		if (system_state == 1) {
-			setSpeed(&FLM, final_speed, drive_dir);
-			setSpeed(&FRM, final_speed, drive_dir);
-			setSpeed(&BLM, final_speed, drive_dir);
-			setSpeed(&BRM, final_speed, drive_dir);
-		} else {
-			setSpeed(&FLM, 0, GPIO_PIN_RESET);
-			setSpeed(&FRM, 0, GPIO_PIN_RESET);
-			setSpeed(&BLM, 0, GPIO_PIN_RESET);
-			setSpeed(&BRM, 0, GPIO_PIN_RESET);
-		}
+		setSpeed(&FLM, final_speed, drive_dir);
+		setSpeed(&FRM, final_speed, drive_dir);
+		setSpeed(&BLM, final_speed, drive_dir);
+		setSpeed(&BRM, final_speed, drive_dir);
 
 
 
