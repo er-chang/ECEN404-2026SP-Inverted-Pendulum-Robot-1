@@ -377,55 +377,7 @@ int main(void)
 
 
 
-		// ── 4. DASHBOARD TELEMETRY (SPI) ──
-
-		// Pack the data (mapping your new variables to the dashboard)
-
-		tx.pitch = theta * (180.0f / 3.14159f); // Convert rads to degrees for the UI
-
-		tx.angular_velocity = theta_dot * (180.0f / 3.14159f);
-
-		tx.setpoint_error = 0.0f; // Replace with pos_error if you want to track it
-
-		tx.front_distance = frontSensor.distance;
-
-		memset(&rx, 0, sizeof(rx));
-
-
-
-		// Send telemetry every 5th loop (~100Hz) to not slow down 500Hz control
-		static uint8_t spi_counter = 0;
-		HAL_StatusTypeDef spi_status = HAL_ERROR;
-		if (++spi_counter >= 5) {
-			spi_counter = 0;
-			HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
-			spi_status = HAL_SPI_TransmitReceive(&hspi1, (uint8_t *)&tx, (uint8_t *)&rx, 16, 1);
-			HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
-		}
-
-
-
-		// Handle incoming commands from the dashboard
-
-		if (spi_status == HAL_OK) {
-
-		spi_fail_count = 0;
-
-		if (rx.command == 'A') system_state = 1; // ARM
-
-		else if (rx.command == 'D' || rx.command == 'E') system_state = 0; // DISARM/ESTOP
-
-		} else {
-
-		if (++spi_fail_count >= 10) {
-
-		// Optional: Re-init SPI here if it gets stuck
-
-		spi_fail_count = 0;
-
-		}
-
-		}
+		// ESP32 telemetry disabled for speed — re-enable later
 
 
 
