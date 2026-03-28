@@ -436,6 +436,115 @@ h4 {
   color: white;
 }
 
+/* Container for the play/stop button icon */
+.icon-container {
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* THE ICON: This is the part that was missing */
+.play-stop-icon {
+  box-sizing: border-box;
+  width: 0;
+  height: 10px;
+  border-style: solid;
+  /* Creates the Play Triangle */
+  border-width: 5px 0 5px 8px;
+  border-color: transparent transparent transparent #00ff43;
+  transition: 250ms all ease;
+}
+
+/* Morphing to the Red Stop Square */
+.btn-playstop.is-recording .play-stop-icon {
+  border-width: 0 0 0 8px;
+  height: 8px;
+  width: 8px;
+  background: #ea404d;
+  border-color: #ea404d;
+}
+
+/* Button Backgrounds (Your current code) */
+.btn-recording-box {
+  display: flex;
+  flex-direction: column; /* Icon above text for a 'box' look */
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+
+  /* The 'Small Box' Dimensions */
+  width: 30px; /* Fixed width makes it a box */
+  height: 30px; /* Fixed height */
+  padding: 4px;
+  border-radius: 5px; /* Matches the smoothness of your uploaded icon */
+  cursor: pointer;
+  transition: all 0.3s ease;
+
+  /* Text Styling */
+  font-family: var(--font-mono); /* Keep your terminal look */
+  font-size: 0.65rem; /* Small text to fit the box */
+  font-weight: 700;
+  color: #ffffff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* 1. Idle/Play State (Green Border) */
+.btn-recording-box {
+  background-color: rgba(0, 255, 67, 0.05); /* Very transparent fill */
+  border: 2px solid rgba(0, 255, 67, 0.6); /* Distinct Green Border */
+}
+
+.btn-recording-box:hover {
+  background-color: rgba(0, 255, 67, 0.15);
+  box-shadow: 0 0 15px rgba(0, 255, 67, 0.3);
+}
+
+/* 2. Active/Stop State (Red Border) */
+.btn-recording-box.is-recording {
+  background-color: rgba(234, 64, 77, 0.1);
+  border: 2px solid #ea404d; /* Distinct Red Border */
+}
+
+.btn-recording-box.is-recording:hover {
+  background-color: rgba(234, 64, 77, 0.25);
+  box-shadow: 0 0 15px rgba(234, 64, 77, 0.5);
+}
+
+/* --- THE MORPHING ICON (Smaller Box-Scale) --- */
+
+.icon-container-box {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.play-stop-icon-box {
+  box-sizing: border-box;
+  width: 0;
+  height: 20px;
+  border-style: solid;
+  /* Triangle Math: 10px+10px=20px height */
+  border-width: 10px 0 10px 18px;
+  transition: 200ms all ease;
+
+  /* Idle Icon Color: Green */
+  border-color: transparent transparent transparent #00ff43;
+}
+
+/* Morph to Red Stop Square */
+.btn-recording-box.is-recording .play-stop-icon-box {
+  border-width: 0 0 0 18px;
+  height: 18px;
+  width: 18px;
+  background: #ea404d;
+  border-color: #ea404d;
+}
+
 .item-2 {
   grid-area: 1 / 2 / 3 / 3;
   display: flex;

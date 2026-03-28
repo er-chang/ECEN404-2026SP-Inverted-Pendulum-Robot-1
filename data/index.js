@@ -5,102 +5,168 @@ document.addEventListener("DOMContentLoaded", () => {
   const estopBtn = document.getElementById("estopBtn");
   const statusIndicator = document.getElementById("statusIndicator");
 
-  // Data Elements
   const pitchVal = document.getElementById("pitchVal");
   const velVal = document.getElementById("velVal");
   const errorVal = document.getElementById("errorVal");
   const fDistVal = document.getElementById("fDistVal");
   const latencyVal = document.getElementById("latencyVal");
 
+  const playStopBtn = document.getElementById("playStopBtn");
+  const playStopText = document.getElementById("playStopText");
+
   // --- 2. WebSocket Setup ---
-  // Connects to the ESP32 IP address automatically
-  let gateway = `ws://${window.location.hostname}/ws`;
-  let websocket;
-  let lastPingTime = 0;
+  const gateway = `ws://${window.location.hostname}/ws`;
+  let websocket = null;
+  let reconnectTimer = null;
+  let lastMessageTime = 0;
+
+  function setStatus(state) {
+    if (!statusIndicator) return;
+
+    if (state === "online") {
+      statusIndicator.className = "indicator --online";
+    } else if (state === "connecting") {
+      statusIndicator.className = "indicator --warning";
+    } else {
+      statusIndicator.className = "indicator --error";
+    }
+  }
+
+  function safeSetText(element, text) {
+    if (element) element.textContent = text;
+  }
+
+  function sendCommand(command) {
+    if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+      console.warn(`WebSocket not open. Could not send command: ${command}`);
+      return;
+    }
+
+    websocket.send(JSON.stringify({ command }));
+  }
 
   function initWebSocket() {
-    console.log("Attempting WebSocket Connection...");
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    console.log("Attempting WebSocket connection...");
+    setStatus("connecting");
+
     websocket = new WebSocket(gateway);
-    websocket.onopen = onOpen;
-    websocket.onclose = onClose;
-    websocket.onmessage = onMessage;
+
+    websocket.onopen = () => {
+      console.log("WebSocket connected");
+      setStatus("online");
+    };
+
+    websocket.onclose = () => {
+      console.log("WebSocket disconnected");
+      setStatus("offline");
+
+      if (!reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          initWebSocket();
+        }, 2000);
+      }
+    };
+
+    websocket.onerror = (err) => {
+      console.error("WebSocket error:", err);
+    };
+
+    websocket.onmessage = (event) => {
+      const now = performance.now();
+
+      // This is message interval, not true network latency
+      if (latencyVal && lastMessageTime !== 0) {
+        latencyVal.textContent = `${(now - lastMessageTime).toFixed(1)} ms`;
+      }
+      lastMessageTime = now;
+
+      try {
+        const data = JSON.parse(event.data);
+
+        if (typeof data.pitch === "number") {
+          pitchVal.innerHTML = `${data.pitch.toFixed(2)}&deg;`;
+        }
+
+        if (typeof data.angular_velocity === "number") {
+          // STM32 sends dps_y, so unit should be deg/s
+          safeSetText(velVal, `${data.angular_velocity.toFixed(2)} deg/s`);
+        }
+
+        if (typeof data.setpoint_error === "number") {
+          errorVal.innerHTML = `${data.setpoint_error.toFixed(2)}&deg;`;
+        }
+
+        if (typeof data.front_distance === "number") {
+          safeSetText(fDistVal, `${data.front_distance.toFixed(2)} m`);
+        }
+      } catch (e) {
+        console.error("Error parsing WebSocket JSON:", e, event.data);
+      }
+    };
   }
 
-  function onOpen(event) {
-    console.log("Connection opened");
-    statusIndicator.className = "indicator --online";
+  // --- 3. Button Logic ---
+  if (armBtn) {
+    armBtn.addEventListener("click", () => {
+      const isArmed = armBtn.classList.contains("is-armed");
+
+      if (isArmed) {
+        armBtn.classList.remove("is-armed");
+        armBtn.innerText = "ARM MOTORS";
+        sendCommand("disarm");
+      } else {
+        armBtn.classList.add("is-armed");
+        armBtn.innerText = "DISARM SYSTEM";
+        sendCommand("arm");
+      }
+    });
   }
 
-  function onClose(event) {
-    console.log("Connection closed");
-    statusIndicator.className = "indicator --error";
-    setTimeout(initWebSocket, 2000); // Try to reconnect every 2 seconds
+  if (estopBtn) {
+    estopBtn.addEventListener("click", () => {
+      sendCommand("estop");
+
+      if (armBtn) {
+        armBtn.classList.remove("is-armed");
+        armBtn.innerText = "ARM MOTORS";
+      }
+
+      alert("!! EMERGENCY STOP TRIGGERED !!");
+    });
   }
 
-  // --- 3. Handle Incoming Data ---
-  function onMessage(event) {
-    // Calculate Wi-Fi Latency based on message arrival
-    const now = performance.now();
-    if (lastPingTime !== 0) {
-      latencyVal.innerText = (now - lastPingTime).toFixed(1) + " ms";
-    }
-    lastPingTime = now;
+  if (rebootBtn) {
+    rebootBtn.addEventListener("click", () => {
+      sendCommand("reboot");
+      rebootBtn.innerText = "INITIALIZING...";
+      rebootBtn.style.pointerEvents = "none";
 
-    try {
-      // Parse the incoming JSON from the ESP32
-      const data = JSON.parse(event.data);
-
-      // Update the specific requested values
-      if (data.pitch !== undefined)
-        pitchVal.innerHTML = ` ${data.pitch.toFixed(2)}&deg;`;
-      if (data.angular_velocity !== undefined)
-        velVal.innerText = ` ${data.angular_velocity.toFixed(2)} rad/s`;
-      if (data.setpoint_error !== undefined)
-        errorVal.innerHTML = ` ${data.setpoint_error.toFixed(2)}&deg;`;
-      if (data.front_distance !== undefined)
-        fDistVal.innerText = ` ${data.front_distance.toFixed(2)} m`;
-    } catch (e) {
-      console.log("Error parsing data: ", e);
-    }
+      setTimeout(() => {
+        rebootBtn.innerText = "REBOOT SYSTEM";
+        rebootBtn.style.pointerEvents = "auto";
+      }, 5000);
+    });
   }
 
-  // --- 4. Button Logic ---
+  if (playStopBtn && playStopText) {
+    playStopBtn.addEventListener("click", () => {
+      const isRecording = playStopBtn.classList.toggle("is-recording");
 
-  // Arm / Disarm Toggle
-  armBtn.addEventListener("click", () => {
-    if (armBtn.classList.contains("is-armed")) {
-      armBtn.classList.remove("is-armed");
-      armBtn.innerText = "ARM MOTORS";
-      websocket.send(JSON.stringify({ command: "disarm" }));
-    } else {
-      armBtn.classList.add("is-armed");
-      armBtn.innerText = "DISARM SYSTEM";
-      websocket.send(JSON.stringify({ command: "arm" }));
-    }
-  });
+      if (isRecording) {
+        playStopText.innerText = "STOP RECORDING";
+        console.log("Recording started...");
+      } else {
+        playStopText.innerText = "START RECORDING";
+        console.log("Recording stopped and saved.");
+      }
+    });
+  }
 
-  // Emergency Stop
-  estopBtn.addEventListener("click", () => {
-    websocket.send(JSON.stringify({ command: "estop" }));
-    // Force disarm state on the UI
-    armBtn.classList.remove("is-armed");
-    armBtn.innerText = "ARM MOTORS";
-    alert("!! EMERGENCY STOP TRIGGERED !!");
-  });
-
-  // Reboot STM32
-  rebootBtn.addEventListener("click", () => {
-    websocket.send(JSON.stringify({ command: "reboot" }));
-    rebootBtn.innerText = "INITIALIZING...";
-    rebootBtn.style.pointerEvents = "none"; // Disable clicks
-
-    // Reset button after 5 seconds
-    setTimeout(() => {
-      rebootBtn.innerText = "REBOOT STM32";
-      rebootBtn.style.pointerEvents = "auto";
-    }, 5000);
-  });
-
-  // Start the connection
+  // --- 4. Start connection ---
   initWebSocket();
 });
