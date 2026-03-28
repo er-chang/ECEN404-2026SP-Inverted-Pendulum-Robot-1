@@ -1,46 +1,76 @@
 /* USER CODE BEGIN Header */
+
 /**
+
   ******************************************************************************
+
   * @file           : main.c
+
   * @brief          : Main program body
+
   ******************************************************************************
+
   * @attention
+
   *
+
   * Copyright (c) 2026 STMicroelectronics.
+
   * All rights reserved.
+
   *
+
   * This software is licensed under terms that can be found in the LICENSE file
+
   * in the root directory of this software component.
+
   * If no LICENSE file comes with this software, it is provided AS-IS.
+
   *
+
   ******************************************************************************
+
   */
+
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+
 #include "peripherals.h"
+
 #include <stdio.h>
+
 #include <math.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
 #define MAX_SPEED 256
+
 #define MIN_SPEED 0
+
 #define PWM_DEADZONE 17        // Minimum PWM to overcome motor static friction
+
+
 
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+
+
 
 /* USER CODE END PM */
 
@@ -54,39 +84,73 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
+
 static const float PI_OVER_180 = 3.14159265f / 180.0f;
+
 static const float PWM_SCALE = 50.0f;
 
+
+
 // Ultrasonic Sensors
+
 Ultrasonic rightSensor = {
+
 		.TriggerPort = 	GPIOA,
+
 		.EchoPort =		GPIOA,
+
 		.TriggerPin =	GPIO_PIN_9,
+
 		.EchoPin =		GPIO_PIN_10,
+
 		.timer = 		&htim2
+
 };
+
 Ultrasonic leftSensor = {
+
 		.TriggerPort = 	GPIOG,
+
 		.EchoPort =		GPIOG,
+
 		.TriggerPin =	GPIO_PIN_14,
+
 		.EchoPin =		GPIO_PIN_9,
+
 		.timer = 		&htim2
+
 };
+
 Ultrasonic frontSensor = {
+
 		.TriggerPort = 	GPIOC,
+
 		.EchoPort =		GPIOC,
+
 		.TriggerPin =	GPIO_PIN_10,
+
 		.EchoPin =		GPIO_PIN_11,
+
 		.timer = 		&htim2
+
 };
+
 // Motors
+
 Motor BLM = { .PWM = &TIM1->CCR1, .directionPort = GPIOF, .directionPin = GPIO_PIN_13 }; // Front Left Motor
+
 Motor BRM = { .PWM = &TIM1->CCR3, .directionPort = GPIOF, .directionPin = GPIO_PIN_14 }; // Front Right Motor — TIM1 CH3
+
 Motor FRM = { .PWM = &TIM1->CCR2, .directionPort = GPIOF, .directionPin = GPIO_PIN_15 }; // Back Left Motor — TIM1 CH2
+
 Motor FLM = { .PWM = &TIM8->CCR3, .directionPort = GPIOG, .directionPin = GPIO_PIN_0 }; // Back Right Motor
+
 // IMU
+
 IMU imu;
+
 volatile uint8_t imu_dma_ready = 0; // Set by DMA complete callback
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -99,11 +163,15 @@ static void MX_TIM8_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC3_Init(void);
 /* USER CODE BEGIN PFP */
+
 int _write(int32_t file, uint8_t *ptr, int32_t len);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+
 
 /* USER CODE END 0 */
 
@@ -115,37 +183,69 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-		// Moustafa's PID Variables
-		float dist_m = 0.0f; // Same distance in meters.
-		float pos_error; //calculates the position error
-		// TUNING GUIDE (tune in this order):
-		//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
-		//        Too high → robot lurches toward/away from obstacle
-		//        Too low  → robot barely reacts to distance changes
-		//   kd: add next. Dampens approach speed. Prevents overshoot past target distance.
-		//        Too high → robot feels sluggish, won't reach target
-		//        Too low  → robot overshoots and bounces back and forth
-		//   ki: add LAST, only if robot settles at wrong distance.
-		//        Too high → slow hunting oscillation
-		//        Too low  → steady-state offset from target
-		float kp = 0.03f;   // gentler — 0.5m error → 0.015 rad lean
-		float ki = 0.0f;     // off for now — add once position hold works
-		float kd = 0.0f;     // off for now — sonar too noisy for derivative
-		float target_angle = 0.0f; // Desired angle to return to stabilization.
-		int test_speed;
-		float target_dist;
-		static float theta;
-		float balance_error;
-		float motor_effort;
-		int final_speed;
-		GPIO_PinState drive_dir;
 
-		static uint32_t prev_time;
-		float dt;
-		static float filtered_gyro;
-		float theta_dot;
-		float pitch_accel;
-		static float balance_integral;
+			// Moustafa's PID Variables
+
+			float dist_m = 0.0f; // Same distance in meters.
+
+			float pos_error; //calculates the position error
+
+			// TUNING GUIDE (tune in this order):
+
+			//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
+
+			//        Too high → robot lurches toward/away from obstacle
+
+			//        Too low  → robot barely reacts to distance changes
+
+			//   kd: add next. Dampens approach speed. Prevents overshoot past target distance.
+
+			//        Too high → robot feels sluggish, won't reach target
+
+			//        Too low  → robot overshoots and bounces back and forth
+
+			//   ki: add LAST, only if robot settles at wrong distance.
+
+			//        Too high → slow hunting oscillation
+
+			//        Too low  → steady-state offset from target
+
+			float kp = 0.03f;   // gentler — 0.5m error → 0.015 rad lean
+
+			float ki = 0.0f;     // off for now — add once position hold works
+
+			float kd = 0.0f;     // off for now — sonar too noisy for derivative
+
+			float target_angle = 0.0f; // Desired angle to return to stabilization.
+
+			int test_speed;
+
+			float target_dist;
+
+			static float theta;
+
+			float balance_error;
+
+			float motor_effort;
+
+			int final_speed;
+
+			GPIO_PinState drive_dir;
+
+
+
+			static uint32_t prev_time;
+
+			float dt;
+
+			static float filtered_gyro;
+
+			float theta_dot;
+
+			float pitch_accel;
+
+			static float balance_integral;
+
   /* USER CODE END 1 */
 
   /* MPU Configuration--------------------------------------------------------*/
@@ -158,12 +258,16 @@ int main(void)
 
   /* USER CODE BEGIN Init */
 
+
+
   /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+
+
 
   /* USER CODE END SysInit */
 
@@ -175,87 +279,162 @@ int main(void)
   MX_TIM2_Init();
   MX_ADC3_Init();
   /* USER CODE BEGIN 2 */
-  // Start timers
-  HAL_TIM_Base_Start(&htim2);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
-  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
-  HAL_Delay(100);
 
-  // Calibrate pot center — hold pendulum vertical during this!
-  // Average 100 readings to find the ADC value at vertical
-  uint32_t pot_sum = 0;
-  for (int i = 0; i < 100; i++) {
-      HAL_ADC_Start(&hadc3);
-      HAL_ADC_PollForConversion(&hadc3, 1);
-      pot_sum += HAL_ADC_GetValue(&hadc3);
-      HAL_ADC_Stop(&hadc3);
-      HAL_Delay(2);
-  }
-  uint16_t pot_center = (uint16_t)(pot_sum / 100);
+	  // Start timers
 
-  // Pot conversion: 10-bit (0-1023), 270° range
-  // Each count = 270/1023 degrees = 0.264 deg = 0.00461 rad
-  const float POT_RAD_PER_COUNT = (270.0f * 3.14159265f / 180.0f) / 1023.0f;
+	  HAL_TIM_Base_Start(&htim2);
 
-  theta = 0.0f;
-  const uint32_t LOOP_PERIOD_US = 2000; // 2ms = 500Hz
+	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+
+	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+
+	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+
+	  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
+
+	  HAL_Delay(100);
+
+
+
+	  // Calibrate pot center — hold pendulum vertical during this!
+
+	  // Average 100 readings to find the ADC value at vertical
+
+	  uint32_t pot_sum = 0;
+
+	  for (int i = 0; i < 100; i++) {
+
+	      HAL_ADC_Start(&hadc3);
+
+	      HAL_ADC_PollForConversion(&hadc3, 1);
+
+	      pot_sum += HAL_ADC_GetValue(&hadc3);
+
+	      HAL_ADC_Stop(&hadc3);
+
+	      HAL_Delay(2);
+
+	  }
+
+	  uint16_t pot_center = (uint16_t)(pot_sum / 100);
+
+
+
+	  // Pot conversion: 12-bit (0-4095), 270° range
+
+	  // Each count = 270/4095 degrees = 0.066 deg = 0.00115 rad
+
+	  const float POT_RAD_PER_COUNT = (270.0f * 3.14159265f / 180.0f) / 4095.0f;
+
+
+
+	  theta = 0.0f;
+
+	  const uint32_t LOOP_PERIOD_US = 2000; // 2ms = 500Hz
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+
+	  while (1)
+
+	  {
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
-	  // ── Measure REAL dt ──
-	  dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
-	  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
-	  prev_time = loop_start;
+		  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
-	  // ── 1. READ POTENTIOMETER (~5µs, zero lag, no filter needed) ──
-	  HAL_ADC_Start(&hadc3);
-	  HAL_ADC_PollForConversion(&hadc3, 1);
-	  uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
-	  HAL_ADC_Stop(&hadc3);
 
-	  static float prev_theta = 0.0f;
-	  theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
-	  theta_dot = (theta - prev_theta) / dt;
-	  prev_theta = theta;
 
-	  // ── 2. PI CONTROLLER ──
-	  #define WINDOW_SIZE 50
-	  static float window[WINDOW_SIZE] = {0};
-	  static int window_idx = 0;
+		  // ── Measure REAL dt ──
 
-	  balance_integral -= window[window_idx];
-	  window[window_idx] = theta;
-	  balance_integral += theta;
-	  window_idx = (window_idx + 1) % WINDOW_SIZE;
+		  dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
 
-	  motor_effort = (60.0f * theta)
-	               + (0.05f * balance_integral);
+		  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
 
-	  // ── 3. ACTUATION ──
-	  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
-	  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
-	  if (fabs(motor_effort) < 0.01f) final_speed = 0;
+		  prev_time = loop_start;
 
-	  drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
 
-	  setSpeed(&FLM, final_speed, drive_dir);
-	  setSpeed(&FRM, final_speed, drive_dir);
-	  setSpeed(&BLM, final_speed, drive_dir);
-	  setSpeed(&BRM, final_speed, drive_dir);
 
-	  // ── Spin-wait for exact 2ms loop period (500Hz) ──
-	  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
-  }
+		  // ── 1. READ POTENTIOMETER (~5µs, zero lag, no filter needed) ──
+
+		  HAL_ADC_Start(&hadc3);
+
+		  HAL_ADC_PollForConversion(&hadc3, 1);
+
+		  uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
+
+		  HAL_ADC_Stop(&hadc3);
+
+
+
+		  static float prev_theta = 0.0f;
+
+		  theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
+
+		  theta_dot = (theta - prev_theta) / dt;
+
+		  prev_theta = theta;
+
+
+
+		  #define WINDOW_SIZE 25
+
+		  static float window[WINDOW_SIZE] = {0};
+
+		  static int window_idx = 0;
+
+
+
+		  window[window_idx] = theta;
+		  window_idx = (window_idx + 1) % WINDOW_SIZE;
+
+		  // Recalculate integral from scratch every pass — prevents float drift
+		  balance_integral = 0.0f;
+		  for (int i = 0; i < WINDOW_SIZE; i++) balance_integral += window[i];
+
+
+
+		  motor_effort = (65.0f * theta)
+		               + (0.1f * balance_integral);
+
+
+
+		  // ── 3. ACTUATION ──
+
+		  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
+
+		  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
+
+		  if (fabs(motor_effort) < 0.01f) final_speed = 0;
+
+
+
+		  drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+
+
+
+		  setSpeed(&FLM, final_speed, drive_dir);
+
+		  setSpeed(&FRM, final_speed, drive_dir);
+
+		  setSpeed(&BLM, final_speed, drive_dir);
+
+		  setSpeed(&BRM, final_speed, drive_dir);
+
+
+
+		  // ── Spin-wait for exact 2ms loop period (500Hz) ──
+
+		  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
+
+ }
+
+
+
   /* USER CODE END 3 */
 }
 
@@ -331,9 +510,9 @@ static void MX_ADC3_Init(void)
   */
   hadc3.Instance = ADC3;
   hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
-  hadc3.Init.Resolution = ADC_RESOLUTION_10B;
+  hadc3.Init.Resolution = ADC_RESOLUTION_12B;
   hadc3.Init.ScanConvMode = ADC_SCAN_DISABLE;
-  hadc3.Init.ContinuousConvMode = ENABLE;
+  hadc3.Init.ContinuousConvMode = DISABLE;
   hadc3.Init.DiscontinuousConvMode = DISABLE;
   hadc3.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc3.Init.ExternalTrigConv = ADC_SOFTWARE_START;
@@ -763,69 +942,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-#ifdef __cplusplus
-extern "C" {
-#endif
 
-// DMA complete callback — called by HAL when I2C2 DMA read finishes
-void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
-{
-    if (hi2c->Instance == I2C2) {
-        imu_dma_ready = 1;
-    }
-}
-
-// External interrupt handler
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  // Check if the interrupt comes from an Ultrasonic Echo Pin
-	// Trigger if front Sensor
-	if (GPIO_Pin == frontSensor.EchoPin){
-		if (HAL_GPIO_ReadPin(frontSensor.EchoPort, frontSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
-			frontSensor.echo_start = __HAL_TIM_GET_COUNTER(frontSensor.timer);
-		}
-		else{
-			// Record Time at Echo End
-			frontSensor.echo_end = __HAL_TIM_GET_COUNTER(frontSensor.timer);
-		}
-	}
-	// Trigger if left Sensor
-	if (GPIO_Pin == leftSensor.EchoPin){
-		if (HAL_GPIO_ReadPin(leftSensor.EchoPort, leftSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
-			leftSensor.echo_start = __HAL_TIM_GET_COUNTER(leftSensor.timer);
-		}
-		else{
-			// Record Time at Echo End
-			leftSensor.echo_end = __HAL_TIM_GET_COUNTER(leftSensor.timer);
-		}
-	}
-	// Trigger if right Sensor
-	if (GPIO_Pin == rightSensor.EchoPin){
-		if (HAL_GPIO_ReadPin(rightSensor.EchoPort, rightSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
-			rightSensor.echo_start = __HAL_TIM_GET_COUNTER(rightSensor.timer);
-		}
-		else{
-			// Record Time at Echo End
-			rightSensor.echo_end = __HAL_TIM_GET_COUNTER(rightSensor.timer);
-		}
-	}
-}
-
-int _write(int file, uint8_t *ptr, int len)
-{
-  for (int i = 0; i < len; i++)
-  {
-      ITM_SendChar(*ptr++);
-  }
-  return len;
-}
-
-#ifdef __cplusplus
-}
-#endif
 /* USER CODE END 4 */
 
  /* MPU Configuration */
