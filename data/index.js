@@ -15,6 +15,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const playStopText = document.getElementById("playStopText");
 
   const webcamFeed = document.getElementById("webcamFeed");
+  // --- Sparkline Setup ---
+  const pitchChart = document.getElementById("pitchChart");
+  const chartCtx = pitchChart ? pitchChart.getContext("2d") : null;
+  const maxDataPoints = 150; // How many points to show on the screen
+  let pitchHistory = new Array(maxDataPoints).fill(0);
 
   // --- 2. Recording & Logging Variables ---
   let mediaRecorder;
@@ -99,6 +104,11 @@ document.addEventListener("DOMContentLoaded", () => {
         // Update UI
         if (typeof data.pitch === "number") {
           pitchVal.innerHTML = `${data.pitch.toFixed(2)}&deg;`;
+
+          // Add new data to sparkline and redraw
+          pitchHistory.push(data.pitch);
+          pitchHistory.shift(); // Remove the oldest data point
+          requestAnimationFrame(drawSparkline); // Efficiently tell the browser to redraw
         }
         if (typeof data.angular_velocity === "number") {
           safeSetText(velVal, `${data.angular_velocity.toFixed(2)} deg/s`);
@@ -132,6 +142,54 @@ document.addEventListener("DOMContentLoaded", () => {
         console.error("Error parsing WebSocket JSON:", e, event.data);
       }
     };
+  }
+
+  // --- Canvas Drawing Function ---
+  function drawSparkline() {
+    if (!chartCtx || !pitchChart) return;
+
+    // Match internal canvas resolution to actual CSS display size
+    pitchChart.width = pitchChart.clientWidth;
+    pitchChart.height = pitchChart.clientHeight;
+
+    const width = pitchChart.width;
+    const height = pitchChart.height;
+    chartCtx.clearRect(0, 0, width, height);
+
+    // Fixed scale: -20 to +20 degrees
+    const maxPitch = 20;
+    const minPitch = -20;
+    const range = maxPitch - minPitch;
+
+    // 1. Draw the "Zero" center line (Target Balance Point)
+    const zeroY = height - ((0 - minPitch) / range) * height;
+    chartCtx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+    chartCtx.lineWidth = 1;
+    chartCtx.beginPath();
+    chartCtx.moveTo(0, zeroY);
+    chartCtx.lineTo(width, zeroY);
+    chartCtx.stroke();
+
+    // 2. Draw the live pitch history line
+    chartCtx.strokeStyle = "#f6f09c"; // Matches your yellow UI text
+    chartCtx.lineWidth = 2;
+    chartCtx.lineJoin = "round";
+    chartCtx.beginPath();
+
+    for (let i = 0; i < maxDataPoints; i++) {
+      const x = (i / (maxDataPoints - 1)) * width;
+      let val = pitchHistory[i];
+
+      // Clamp the value visually so it doesn't draw outside the box
+      if (val > maxPitch) val = maxPitch;
+      if (val < minPitch) val = minPitch;
+
+      const y = height - ((val - minPitch) / range) * height;
+
+      if (i === 0) chartCtx.moveTo(x, y);
+      else chartCtx.lineTo(x, y);
+    }
+    chartCtx.stroke();
   }
 
   // --- 4. Webcam Setup ---
