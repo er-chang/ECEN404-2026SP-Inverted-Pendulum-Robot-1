@@ -1,114 +1,184 @@
 /* USER CODE BEGIN Header */
+
 /**
+
   ******************************************************************************
+
   * @file           : main.c
+
   * @brief          : Main program body
+
   ******************************************************************************
+
   * @attention
+
   *
+
   * Copyright (c) 2026 STMicroelectronics.
+
   * All rights reserved.
+
   *
+
   * This software is licensed under terms that can be found in the LICENSE file
+
   * in the root directory of this software component.
+
   * If no LICENSE file comes with this software, it is provided AS-IS.
+
   *
+
   ******************************************************************************
+
   */
+
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+
 #include "peripherals.h"
+
 #include <stdio.h>
+
 #include <math.h>
-#include "string.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
 #define MAX_SPEED 256
 #define MIN_SPEED 0
-#define PWM_DEADZONE 17        // Minimum PWM to overcome motor static friction
+#define PWM_DEADZONE 17
+
+// Data logger — view in debugger Expressions window
+#define LOG_SIZE 5000         // 5000 samples at 500Hz = 10 seconds
+#define LOG_EVERY 1           // log every loop
+
+
 
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
+
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc3;
-DMA_HandleTypeDef hdma_adc3;
 
 I2C_HandleTypeDef hi2c2;
-
-SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
-volatile uint16_t pot_dma_value = 0;  // DMA writes here continuously
-
 static const float PI_OVER_180 = 3.14159265f / 180.0f;
 static const float PWM_SCALE = 50.0f;
 
+// ── DATA LOGGER (view in debugger Expressions) ──
+// After robot falls, pause debugger, add "log_theta" to Expressions
+volatile float log_theta[LOG_SIZE];
+volatile float log_effort[LOG_SIZE];
+volatile uint16_t log_idx = 0;
+volatile uint8_t log_done = 0;  // 1 = robot fell, data ready
+
+
+
 // Ultrasonic Sensors
+
 Ultrasonic rightSensor = {
+
 		.TriggerPort = 	GPIOA,
+
 		.EchoPort =		GPIOA,
+
 		.TriggerPin =	GPIO_PIN_9,
+
 		.EchoPin =		GPIO_PIN_10,
+
 		.timer = 		&htim2
+
 };
+
 Ultrasonic leftSensor = {
+
 		.TriggerPort = 	GPIOG,
+
 		.EchoPort =		GPIOG,
+
 		.TriggerPin =	GPIO_PIN_14,
+
 		.EchoPin =		GPIO_PIN_9,
+
 		.timer = 		&htim2
+
 };
+
 Ultrasonic frontSensor = {
+
 		.TriggerPort = 	GPIOC,
+
 		.EchoPort =		GPIOC,
+
 		.TriggerPin =	GPIO_PIN_10,
+
 		.EchoPin =		GPIO_PIN_11,
+
 		.timer = 		&htim2
+
 };
+
 // Motors
+
 Motor BLM = { .PWM = &TIM1->CCR1, .directionPort = GPIOF, .directionPin = GPIO_PIN_13 }; // Front Left Motor
+
 Motor BRM = { .PWM = &TIM1->CCR3, .directionPort = GPIOF, .directionPin = GPIO_PIN_14 }; // Front Right Motor — TIM1 CH3
+
 Motor FRM = { .PWM = &TIM1->CCR2, .directionPort = GPIOF, .directionPin = GPIO_PIN_15 }; // Back Left Motor — TIM1 CH2
+
 Motor FLM = { .PWM = &TIM8->CCR3, .directionPort = GPIOG, .directionPin = GPIO_PIN_0 }; // Back Right Motor
+
+// IMU
+
+IMU imu;
+
+volatile uint8_t imu_dma_ready = 0; // Set by DMA complete callback
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MPU_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM8_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC3_Init(void);
-static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
+
 int _write(int32_t file, uint8_t *ptr, int32_t len);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+
 
 /* USER CODE END 0 */
 
@@ -119,278 +189,262 @@ int _write(int32_t file, uint8_t *ptr, int32_t len);
 int main(void)
 {
 
-	/* USER CODE BEGIN 1 */
+  /* USER CODE BEGIN 1 */
 
-		// Moustafa's PID Variables
+			// Moustafa's PID Variables
 
-		float dist_m = 0.0f; // Same distance in meters.
+			float dist_m = 0.0f; // Same distance in meters.
 
-		float pos_error; //calculates the position error
+			float pos_error; //calculates the position error
 
-		// TUNING GUIDE (tune in this order):
+			// TUNING GUIDE (tune in this order):
 
-		// kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
+			//   kp: start here. Robot 20cm too far → should lean ~0.02 rad. kp=0.10 gives that.
 
-		// Too high → robot lurches toward/away from obstacle
+			//        Too high → robot lurches toward/away from obstacle
 
-		// Too low → robot barely reacts to distance changes
+			//        Too low  → robot barely reacts to distance changes
 
-		// kd: add next. Dampens approach speed. Prevents overshoot past target distance.
+			//   kd: add next. Dampens approach speed. Prevents overshoot past target distance.
 
-		// Too high → robot feels sluggish, won't reach target
+			//        Too high → robot feels sluggish, won't reach target
 
-		// Too low → robot overshoots and bounces back and forth
+			//        Too low  → robot overshoots and bounces back and forth
 
-		// ki: add LAST, only if robot settles at wrong distance.
+			//   ki: add LAST, only if robot settles at wrong distance.
 
-		// Too high → slow hunting oscillation
+			//        Too high → slow hunting oscillation
 
-		// Too low → steady-state offset from target
+			//        Too low  → steady-state offset from target
 
-		float kp = 0.03f; // gentler — 0.5m error → 0.015 rad lean
+			float kp = 0.03f;   // gentler — 0.5m error → 0.015 rad lean
 
-		float ki = 0.0f; // off for now — add once position hold works
+			float ki = 0.0f;     // off for now — add once position hold works
 
-		float kd = 0.0f; // off for now — sonar too noisy for derivative
+			float kd = 0.0f;     // off for now — sonar too noisy for derivative
 
-		float target_angle = 0.0f; // Desired angle to return to stabilization.
+			float target_angle = 0.0f; // Desired angle to return to stabilization.
 
-		int test_speed;
+			int test_speed;
 
-		float target_dist;
+			float target_dist;
 
-		static float theta;
+			static float theta;
 
-		float balance_error;
+			float balance_error;
 
-		float motor_effort;
+			float motor_effort;
 
-		int final_speed;
+			int final_speed;
 
-		GPIO_PinState drive_dir;
+			GPIO_PinState drive_dir;
 
 
 
-		static uint32_t prev_time;
+			static uint32_t prev_time;
 
-		float dt;
+			float dt;
 
-		static float filtered_gyro;
+			static float filtered_gyro;
 
-		float theta_dot;
+			float theta_dot;
 
-		float pitch_accel;
+			float pitch_accel;
 
-		static float balance_integral;
+			static float balance_integral;
 
-	  /* USER CODE END 1 */
+  /* USER CODE END 1 */
 
-	  /* MPU Configuration--------------------------------------------------------*/
-	  MPU_Config();
+  /* MPU Configuration--------------------------------------------------------*/
+  MPU_Config();
 
-	  /* MCU Configuration--------------------------------------------------------*/
+  /* MCU Configuration--------------------------------------------------------*/
 
-	  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-	  HAL_Init();
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
 
-	  /* USER CODE BEGIN Init */
+  /* USER CODE BEGIN Init */
 
 
 
-	  /* USER CODE END Init */
+  /* USER CODE END Init */
 
-	  /* Configure the system clock */
-	  SystemClock_Config();
+  /* Configure the system clock */
+  SystemClock_Config();
 
-	  /* USER CODE BEGIN SysInit */
+  /* USER CODE BEGIN SysInit */
 
 
 
-	  /* USER CODE END SysInit */
+  /* USER CODE END SysInit */
 
-	  /* Initialize all configured peripherals */
-	  MX_GPIO_Init();
-	  MX_I2C2_Init();
-	  MX_TIM1_Init();
-	  MX_TIM8_Init();
-	  MX_TIM2_Init();
-	  MX_ADC3_Init();
-	  MX_SPI1_Init();
-	  /* USER CODE BEGIN 2 */
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_I2C2_Init();
+  MX_TIM1_Init();
+  MX_TIM8_Init();
+  MX_TIM2_Init();
+  MX_ADC3_Init();
+  /* USER CODE BEGIN 2 */
 
-		// Start timers
+	  // Start timers
 
-		HAL_TIM_Base_Start(&htim2);
+	  HAL_TIM_Base_Start(&htim2);
 
-		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
 
-		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
-		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
 
-		HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
+	  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
 
-		HAL_Delay(100);
+	  HAL_Delay(100);
 
 
 
-		uint8_t system_state = 0;
+	  // Calibrate pot center — hold pendulum vertical during this!
 
-		uint8_t spi_fail_count = 0;
+	  // Average 100 readings to find the ADC value at vertical
 
-		TelemetryPacket tx;
+	  uint32_t pot_sum = 0;
 
-		CommandPacket rx;
+	  for (int i = 0; i < 100; i++) {
 
-		memset(&tx, 0, sizeof(tx));
+	      HAL_ADC_Start(&hadc3);
 
-		memset(&rx, 0, sizeof(rx));
+	      HAL_ADC_PollForConversion(&hadc3, 1);
 
+	      pot_sum += HAL_ADC_GetValue(&hadc3);
 
+	      HAL_ADC_Stop(&hadc3);
 
+	      HAL_Delay(2);
 
+	  }
 
-		// Calibrate pot center — hold pendulum vertical during this!
+	  uint16_t pot_center = (uint16_t)(pot_sum / 100);
 
-		// Average 100 readings to find the ADC value at vertical
 
-		// Calibrate pot center — blocking reads (simple, works)
-		uint32_t pot_sum = 0;
-		for (int i = 0; i < 100; i++) {
-			HAL_ADC_Start(&hadc3);
-			HAL_ADC_PollForConversion(&hadc3, 1);
-			pot_sum += HAL_ADC_GetValue(&hadc3);
-			HAL_ADC_Stop(&hadc3);
-			HAL_Delay(2);
-		}
-		uint16_t pot_center = (uint16_t)(pot_sum / 100);
 
+	  // Pot conversion: 12-bit (0-4095), 270° range
 
+	  // Each count = 270/4095 degrees = 0.066 deg = 0.00115 rad
 
-		// Pot conversion: 12-bit (0-4095), 270° range
+	  const float POT_RAD_PER_COUNT = (270.0f * 3.14159265f / 180.0f) / 4095.0f;
 
-		// Each count = 270/4095 degrees = 0.66 deg = 0.00461 rad
 
-		const float POT_RAD_PER_COUNT = (270.0f * 3.14159265f / 180.0f) / 4095.0f;
 
+	  theta = 0.0f;
 
+	  const uint32_t LOOP_PERIOD_US = 2000; // 2ms = 500Hz
 
-		theta = 0.0f;
+  /* USER CODE END 2 */
 
-		const uint32_t LOOP_PERIOD_US = 2000; // 2ms = 500Hz
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
 
-	  /* USER CODE END 2 */
+	  while (1)
 
-	  /* Infinite loop */
-	  /* USER CODE BEGIN WHILE */
+	  {
 
-		while (1)
+    /* USER CODE END WHILE */
 
-		{
+    /* USER CODE BEGIN 3 */
 
-	    /* USER CODE END WHILE */
+		  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
-	    /* USER CODE BEGIN 3 */
 
-		uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
 
+		  // ── Measure REAL dt ──
 
+		  dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
 
-		// ── Measure REAL dt ──
+		  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
 
-		dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
+		  prev_time = loop_start;
 
-		if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
 
-		prev_time = loop_start;
 
+		  // ── 1. READ POTENTIOMETER (~5µs, zero lag, no filter needed) ──
 
+		  HAL_ADC_Start(&hadc3);
 
-		// ── 1. READ POTENTIOMETER (~5µs blocking) ──
-		HAL_ADC_Start(&hadc3);
-		HAL_ADC_PollForConversion(&hadc3, 1);
-		uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
-		HAL_ADC_Stop(&hadc3);
+		  HAL_ADC_PollForConversion(&hadc3, 1);
 
+		  uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
 
+		  HAL_ADC_Stop(&hadc3);
 
-		static float prev_theta = 0.0f;
 
-		theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
 
-		theta_dot = (theta - prev_theta) / dt;
+		  static float prev_theta = 0.0f;
 
-		prev_theta = theta;
+		  theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
 
-	#if true
+		  theta_dot = (theta - prev_theta) / dt;
 
-		#define WINDOW_SIZE 25
+		  prev_theta = theta;
 
-		static float window[WINDOW_SIZE] = {0};
 
-		static int window_idx = 0;
 
+		  #define WINDOW_SIZE 10
 
+		  static float window[WINDOW_SIZE] = {0};
 
-		window[window_idx] = theta;
+		  static int window_idx = 0;
 
-		window_idx = (window_idx + 1) % WINDOW_SIZE;
 
 
+		  window[window_idx] = theta;
+		  window_idx = (window_idx + 1) % WINDOW_SIZE;
 
-		// Recalculate integral from scratch every pass — prevents float drift
+		  // Recalculate integral from scratch every pass — prevents float drift
+		  balance_integral = 0.0f;
+		  for (int i = 0; i < WINDOW_SIZE; i++) balance_integral += window[i];
 
-		balance_integral = 0.0f;
 
-		for (int i = 0; i < WINDOW_SIZE; i++) balance_integral += window[i];
 
-	#endif
+		  motor_effort = (65.0f * theta)
+		               + (3.0f * theta_dot)
+		               + (0.02f * balance_integral);
 
 
 
-		motor_effort = (40.0f * theta)
+		  // ── 3. ACTUATION ──
 
-		+ (0.1f * balance_integral)
+		  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
 
-		+ (0.0f * theta_dot);
+		  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
 
+		  if (fabs(motor_effort) < 0.01f) final_speed = 0;
 
 
-		// ── 3. ACTUATION ──
 
-		final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
+		  drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
 
-		if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
 
-		if (fabs(motor_effort) < 0.01f) final_speed = 0;
 
+		  setSpeed(&FLM, final_speed, drive_dir);
+		  setSpeed(&FRM, final_speed, drive_dir);
+		  setSpeed(&BLM, final_speed, drive_dir);
+		  setSpeed(&BRM, final_speed, drive_dir);
 
+		  // ── LOG DATA (zero overhead — just array writes) ──
+		  if (!log_done && log_idx < LOG_SIZE) {
+		      log_theta[log_idx] = theta;
+		      log_effort[log_idx] = motor_effort;
+		      log_idx++;
+		  }
 
-		drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+		  // Buffer wraps around when full — always has the latest 500 samples
+		  if (log_idx >= LOG_SIZE) log_idx = 0;
 
-
-
-		setSpeed(&FLM, final_speed, drive_dir);
-		setSpeed(&FRM, final_speed, drive_dir);
-		setSpeed(&BLM, final_speed, drive_dir);
-		setSpeed(&BRM, final_speed, drive_dir);
-
-
-
-		// ESP32 telemetry disabled for speed — re-enable later
-
-
-
-		// Optional: Only drive motors if system_state == 1 (Armed via web UI)
-
-		// If you want to use the web button, wrap your setSpeed commands in: if(system_state == 1) { ... } else { setSpeed(..., 0, ...); }
-
-
-
-		// ── Spin-wait for exact 2ms loop period (500Hz) ──
-
-		while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
+		  // ── Spin-wait for exact 2ms loop period (500Hz) ──
+		  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
  }
+
+
 
   /* USER CODE END 3 */
 }
@@ -542,46 +596,6 @@ static void MX_I2C2_Init(void)
   /* USER CODE BEGIN I2C2_Init 2 */
 
   /* USER CODE END I2C2_Init 2 */
-
-}
-
-/**
-  * @brief SPI1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI1_Init(void)
-{
-
-  /* USER CODE BEGIN SPI1_Init 0 */
-
-  /* USER CODE END SPI1_Init 0 */
-
-  /* USER CODE BEGIN SPI1_Init 1 */
-
-  /* USER CODE END SPI1_Init 1 */
-  /* SPI1 parameter configuration*/
-  hspi1.Instance = SPI1;
-  hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
-  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.CRCPolynomial = 7;
-  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI1_Init 2 */
-
-  /* USER CODE END SPI1_Init 2 */
 
 }
 
@@ -792,22 +806,6 @@ static void MX_TIM8_Init(void)
 }
 
 /**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA2_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA2_Stream0_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -872,20 +870,24 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA1 PA2 PA3 PA7
-                           PA8 PA11 PA12 PA15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_7
-                          |GPIO_PIN_8|GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_15;
+  /*Configure GPIO pins : PA1 PA2 PA3 PA4
+                           PA5 PA6 PA7 PA8
+                           PA11 PA12 PA15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4
+                          |GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8
+                          |GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB1 PB2 PB12
                            PB13 PB14 PB15 PB4
-                           PB6 PB7 PB8 PB9 */
+                           PB5 PB6 PB7 PB8
+                           PB9 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_12
                           |GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_4
-                          |GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8|GPIO_PIN_9;
+                          |GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8
+                          |GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -951,68 +953,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-#ifdef __cplusplus
-extern "C" {
-#endif
 
-// DMA complete callback — called by HAL when I2C2 DMA read finishes
-void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
-{
-    if (hi2c->Instance == I2C2) {
-    }
-}
-
-// External interrupt handler
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  // Check if the interrupt comes from an Ultrasonic Echo Pin
-	// Trigger if front Sensor
-	if (GPIO_Pin == frontSensor.EchoPin){
-		if (HAL_GPIO_ReadPin(frontSensor.EchoPort, frontSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
-			frontSensor.echo_start = __HAL_TIM_GET_COUNTER(frontSensor.timer);
-		}
-		else{
-			// Record Time at Echo End
-			frontSensor.echo_end = __HAL_TIM_GET_COUNTER(frontSensor.timer);
-		}
-	}
-	// Trigger if left Sensor
-	if (GPIO_Pin == leftSensor.EchoPin){
-		if (HAL_GPIO_ReadPin(leftSensor.EchoPort, leftSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
-			leftSensor.echo_start = __HAL_TIM_GET_COUNTER(leftSensor.timer);
-		}
-		else{
-			// Record Time at Echo End
-			leftSensor.echo_end = __HAL_TIM_GET_COUNTER(leftSensor.timer);
-		}
-	}
-	// Trigger if right Sensor
-	if (GPIO_Pin == rightSensor.EchoPin){
-		if (HAL_GPIO_ReadPin(rightSensor.EchoPort, rightSensor.EchoPin) == GPIO_PIN_SET){
-			// Record Time at Echo Start
-			rightSensor.echo_start = __HAL_TIM_GET_COUNTER(rightSensor.timer);
-		}
-		else{
-			// Record Time at Echo End
-			rightSensor.echo_end = __HAL_TIM_GET_COUNTER(rightSensor.timer);
-		}
-	}
-}
-
-int _write(int file, uint8_t *ptr, int len)
-{
-  for (int i = 0; i < len; i++)
-  {
-      ITM_SendChar(*ptr++);
-  }
-  return len;
-}
-
-#ifdef __cplusplus
-}
-#endif
 /* USER CODE END 4 */
 
  /* MPU Configuration */
