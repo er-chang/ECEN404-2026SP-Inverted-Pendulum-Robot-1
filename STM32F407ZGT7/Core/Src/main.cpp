@@ -389,17 +389,12 @@ int main(void)
 
 
 		  #define WINDOW_SIZE 10
-
 		  static float window[WINDOW_SIZE] = {0};
-
 		  static int window_idx = 0;
 
-
-
-		  window[window_idx] = theta;
+		  // Proper integral: error × time, recalculated each pass
+		  window[window_idx] = theta * dt;
 		  window_idx = (window_idx + 1) % WINDOW_SIZE;
-
-		  // Recalculate integral from scratch every pass — prevents float drift
 		  balance_integral = 0.0f;
 		  for (int i = 0; i < WINDOW_SIZE; i++) balance_integral += window[i];
 
@@ -999,7 +994,7 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERTn
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
