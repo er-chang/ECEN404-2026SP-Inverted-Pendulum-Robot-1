@@ -29,7 +29,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let recordingStartTime = 0;
 
   // --- 3. WebSocket Setup ---
-  const gateway = `ws://${window.location.hostname}/ws`;
+  const gateway = `ws://192.168.4.1/ws`;
   let websocket = null;
   let reconnectTimer = null;
   let lastMessageTime = 0;

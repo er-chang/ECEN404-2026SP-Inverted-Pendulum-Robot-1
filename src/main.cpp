@@ -5,6 +5,11 @@
 #include <ESP32SPISlave.h>
 #include <LittleFS.h>
 #include <string.h>
+#include <ESPmDNS.h>
+
+IPAddress local_IP(192, 168, 4, 1);
+IPAddress gateway(192, 168, 4, 1);
+IPAddress subnet(255, 255, 255, 0);
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -78,6 +83,10 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
 // 6. Setup Function
 void setup() {
   Serial.begin(115200);
+
+  if (MDNS.begin("ipr")) {
+    Serial.println("MDNS responder started");
+  }
   
   if (!LittleFS.begin(true)) {
     Serial.println("Error mounting LittleFS");
@@ -91,6 +100,7 @@ void setup() {
   slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 16);
 
   // Initialize Wi-Fi Access Point
+  WiFi.softAPConfig(local_IP, gateway, subnet);
   WiFi.softAP("IPR", "password");
   WiFi.setSleep(false); 
 
