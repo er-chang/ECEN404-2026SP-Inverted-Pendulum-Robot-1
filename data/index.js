@@ -15,10 +15,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const playStopText = document.getElementById("playStopText");
 
   const webcamFeed = document.getElementById("webcamFeed");
+
+  // NEW: PID Tuning Elements
+  const sendTuneBtn = document.getElementById("sendTuneBtn");
+  const kpInput = document.getElementById("kpInput");
+  const kiInput = document.getElementById("kiInput");
+  const kdInput = document.getElementById("kdInput");
+
   // --- Sparkline Setup ---
   const pitchChart = document.getElementById("pitchChart");
   const chartCtx = pitchChart ? pitchChart.getContext("2d") : null;
-  const maxDataPoints = 150; // How many points to show on the screen
+  const maxDataPoints = 150;
   let pitchHistory = new Array(maxDataPoints).fill(0);
 
   // --- 2. Recording & Logging Variables ---
@@ -36,14 +43,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function setStatus(state) {
     if (!statusIndicator) return;
-
-    if (state === "online") {
-      statusIndicator.className = "indicator --online";
-    } else if (state === "connecting") {
+    if (state === "online") statusIndicator.className = "indicator --online";
+    else if (state === "connecting")
       statusIndicator.className = "indicator --warning";
-    } else {
-      statusIndicator.className = "indicator --error";
-    }
+    else statusIndicator.className = "indicator --error";
   }
 
   function safeSetText(element, text) {
@@ -51,32 +54,20 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function sendCommand(command) {
-    if (!websocket || websocket.readyState !== WebSocket.OPEN) {
-      console.warn(`WebSocket not open. Could not send command: ${command}`);
-      return;
-    }
+    if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
     websocket.send(JSON.stringify({ command }));
   }
 
   function initWebSocket() {
-    if (websocket && websocket.readyState === WebSocket.OPEN) {
-      return;
-    }
+    if (websocket && websocket.readyState === WebSocket.OPEN) return;
 
-    console.log("Attempting WebSocket connection...");
     setStatus("connecting");
-
     websocket = new WebSocket(gateway);
 
-    websocket.onopen = () => {
-      console.log("WebSocket connected");
-      setStatus("online");
-    };
+    websocket.onopen = () => setStatus("online");
 
     websocket.onclose = () => {
-      console.log("WebSocket disconnected");
       setStatus("offline");
-
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
@@ -85,14 +76,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     };
 
-    websocket.onerror = (err) => {
-      console.error("WebSocket error:", err);
-    };
-
     websocket.onmessage = (event) => {
       const now = performance.now();
-
-      // Track rough message interval
       if (latencyVal && lastMessageTime !== 0) {
         latencyVal.textContent = `${(now - lastMessageTime).toFixed(1)} ms`;
       }
@@ -101,14 +86,12 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const data = JSON.parse(event.data);
 
-        // Update UI
-        if (typeof data.pitch === "number") {
-          pitchVal.innerHTML = `${data.pitch.toFixed(2)}&deg;`;
-
-          // Add new data to sparkline and redraw
-          pitchHistory.push(data.pitch);
-          pitchHistory.shift(); // Remove the oldest data point
-          requestAnimationFrame(drawSparkline); // Efficiently tell the browser to redraw
+        // Update UI using PITCH_FILTERED
+        if (typeof data.pitch_filtered === "number") {
+          pitchVal.innerHTML = `${data.pitch_filtered.toFixed(2)}&deg;`;
+          pitchHistory.push(data.pitch_filtered);
+          pitchHistory.shift();
+          requestAnimationFrame(drawSparkline);
         }
         if (typeof data.angular_velocity === "number") {
           safeSetText(velVal, `${data.angular_velocity.toFixed(2)} deg/s`);
@@ -121,12 +104,13 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // --- DATA LOGGING ---
-        // If recording is active and we have data, push it to the spreadsheet array
-        if (isLoggingData && typeof data.pitch === "number") {
+        if (isLoggingData && typeof data.pitch_filtered === "number") {
           const elapsedMs = (performance.now() - recordingStartTime).toFixed(0);
-
-          // Safe fallbacks in case a specific value is missing from the JSON
-          const vPitch = data.pitch.toFixed(2);
+          const vRaw =
+            typeof data.pitch_raw === "number"
+              ? data.pitch_raw.toFixed(2)
+              : "0.00";
+          const vFilt = data.pitch_filtered.toFixed(2);
           const vVel =
             typeof data.angular_velocity === "number"
               ? data.angular_velocity.toFixed(2)
@@ -136,7 +120,7 @@ document.addEventListener("DOMContentLoaded", () => {
               ? data.setpoint_error.toFixed(2)
               : "0.00";
 
-          telemetryLog.push([elapsedMs, vPitch, vVel, vErr]);
+          telemetryLog.push([elapsedMs, vRaw, vFilt, vVel, vErr]);
         }
       } catch (e) {
         console.error("Error parsing WebSocket JSON:", e, event.data);
@@ -148,20 +132,17 @@ document.addEventListener("DOMContentLoaded", () => {
   function drawSparkline() {
     if (!chartCtx || !pitchChart) return;
 
-    // Match internal canvas resolution to actual CSS display size
     pitchChart.width = pitchChart.clientWidth;
     pitchChart.height = pitchChart.clientHeight;
-
     const width = pitchChart.width;
     const height = pitchChart.height;
+
     chartCtx.clearRect(0, 0, width, height);
 
-    // Fixed scale: -20 to +20 degrees
     const maxPitch = 20;
     const minPitch = -20;
     const range = maxPitch - minPitch;
 
-    // 1. Draw the "Zero" center line (Target Balance Point)
     const zeroY = height - ((0 - minPitch) / range) * height;
     chartCtx.strokeStyle = "rgba(255, 255, 255, 0.15)";
     chartCtx.lineWidth = 1;
@@ -170,8 +151,7 @@ document.addEventListener("DOMContentLoaded", () => {
     chartCtx.lineTo(width, zeroY);
     chartCtx.stroke();
 
-    // 2. Draw the live pitch history line
-    chartCtx.strokeStyle = "#f6f09c"; // Matches your yellow UI text
+    chartCtx.strokeStyle = "#f6f09c";
     chartCtx.lineWidth = 2;
     chartCtx.lineJoin = "round";
     chartCtx.beginPath();
@@ -180,12 +160,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const x = (i / (maxDataPoints - 1)) * width;
       let val = pitchHistory[i];
 
-      // Clamp the value visually so it doesn't draw outside the box
       if (val > maxPitch) val = maxPitch;
       if (val < minPitch) val = minPitch;
 
       const y = height - ((val - minPitch) / range) * height;
-
       if (i === 0) chartCtx.moveTo(x, y);
       else chartCtx.lineTo(x, y);
     }
@@ -195,85 +173,56 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- 4. Webcam Setup ---
   async function initCamera() {
     try {
-      // Request access to the user's webcam
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (webcamFeed) {
-        webcamFeed.srcObject = stream;
-      }
+      if (webcamFeed) webcamFeed.srcObject = stream;
 
-      // Set up the MediaRecorder to capture the stream
       mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
 
-      // Collect data chunks as they are recorded
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          recordedChunks.push(event.data);
-        }
+        if (event.data.size > 0) recordedChunks.push(event.data);
       };
 
-      // When recording stops, compile the chunks and download the file
       mediaRecorder.onstop = () => {
         const blob = new Blob(recordedChunks, { type: "video/webm" });
-        recordedChunks = []; // Clear memory for the next recording
-
-        // Create a temporary hidden link to trigger the download
+        recordedChunks = [];
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         document.body.appendChild(a);
         a.style = "display: none";
         a.href = url;
-
-        // Generate a filename with a timestamp
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
         a.download = `pendulum_video_${timestamp}.webm`;
-
         a.click();
         window.URL.revokeObjectURL(url);
         a.remove();
-        console.log("Video saved to disk.");
       };
-
-      console.log("Webcam initialized successfully.");
     } catch (err) {
-      console.error(
-        "Error accessing webcam. Ensure you are on localhost or HTTPS/allowed IP:",
-        err,
-      );
+      console.error("Error accessing webcam:", err);
     }
   }
 
-  // --- 5. CSV Export Helper ---
   function saveTelemetryCSV() {
-    if (telemetryLog.length <= 1) return; // Don't save if there's no data besides headers
+    if (telemetryLog.length <= 1) return;
 
-    // Convert the 2D array into a CSV string
     let csvContent =
       "data:text/csv;charset=utf-8," +
       telemetryLog.map((row) => row.join(",")).join("\n");
-
-    // Create a hidden download link
     const encodedUri = encodeURI(csvContent);
     const a = document.createElement("a");
     a.setAttribute("href", encodedUri);
-
-    // Name the file with a timestamp to match the video
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     a.setAttribute("download", `pendulum_data_${timestamp}.csv`);
-
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    console.log("Telemetry CSV saved to disk.");
   }
 
-  // Initialize camera when page loads
   initCamera();
 
   // --- 6. Button Logic ---
   if (armBtn) {
     armBtn.addEventListener("click", () => {
       const isArmed = armBtn.classList.contains("is-armed");
-
       if (isArmed) {
         armBtn.classList.remove("is-armed");
         armBtn.innerText = "ARM MOTORS";
@@ -302,7 +251,6 @@ document.addEventListener("DOMContentLoaded", () => {
       sendCommand("reboot");
       rebootBtn.innerText = "INITIALIZING...";
       rebootBtn.style.pointerEvents = "none";
-
       setTimeout(() => {
         rebootBtn.innerText = "REBOOT SYSTEM";
         rebootBtn.style.pointerEvents = "auto";
@@ -313,7 +261,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (playStopBtn) {
     playStopBtn.addEventListener("click", () => {
       const isRecording = playStopBtn.classList.toggle("is-recording");
-
       if (playStopText) {
         playStopText.innerText = isRecording
           ? "STOP RECORDING"
@@ -321,36 +268,73 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (isRecording) {
-        // --- START EVERYTHING ---
-        // 1. Start Video
         if (mediaRecorder && mediaRecorder.state === "inactive") {
           recordedChunks = [];
           mediaRecorder.start();
-          console.log("Video recording started...");
         }
-
-        // 2. Start Data Logging
         isLoggingData = true;
         recordingStartTime = performance.now();
-        // Setup the CSV headers
         telemetryLog = [
-          ["Time (ms)", "Pitch (deg)", "Velocity (deg/s)", "Error (deg)"],
+          [
+            "Time (ms)",
+            "Raw Pitch (deg)",
+            "Filtered Pitch (deg)",
+            "Velocity (deg/s)",
+            "Error (deg)",
+          ],
         ];
-        console.log("Data logging started...");
       } else {
-        // --- STOP EVERYTHING ---
-        // 1. Stop Video (this triggers the download automatically via onstop)
         if (mediaRecorder && mediaRecorder.state === "recording") {
           mediaRecorder.stop();
         }
-
-        // 2. Stop Data Logging & Download CSV
         isLoggingData = false;
         saveTelemetryCSV();
       }
     });
   }
 
-  // --- 7. Start connection ---
+  // NEW: Tuning Button Logic
+  if (sendTuneBtn) {
+    sendTuneBtn.addEventListener("click", () => {
+      // 1. Grab the values as floats
+      const kp_val = parseFloat(kpInput.value);
+      const ki_val = parseFloat(kiInput.value);
+      const kd_val = parseFloat(kdInput.value);
+
+      // 2. Validate the data (prevent sending bad data if a box is empty)
+      if (isNaN(kp_val) || isNaN(ki_val) || isNaN(kd_val)) {
+        alert("Please enter valid numbers for all PID values.");
+        return;
+      }
+
+      // 3. Send the custom JSON payload
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+        const payload = {
+          command: "tune",
+          kp: kp_val,
+          ki: ki_val,
+          kd: kd_val,
+        };
+        websocket.send(JSON.stringify(payload));
+
+        // Visual feedback to let you know it sent successfully
+        const originalText = sendTuneBtn.innerText;
+        sendTuneBtn.innerText = "SENT!";
+        sendTuneBtn.style.backgroundColor = "rgba(0, 213, 99, 0.2)";
+        sendTuneBtn.style.borderColor = "#00d563";
+        sendTuneBtn.style.color = "white";
+
+        setTimeout(() => {
+          sendTuneBtn.innerText = originalText;
+          sendTuneBtn.style.backgroundColor = "";
+          sendTuneBtn.style.borderColor = "";
+          sendTuneBtn.style.color = "";
+        }, 1000);
+      } else {
+        console.warn("WebSocket not connected. Cannot send tuning.");
+      }
+    });
+  }
+
   initWebSocket();
 });

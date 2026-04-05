@@ -477,7 +477,7 @@ h4 {
   grid-area: 1 / 2 / 3 / 3;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   height: 100%;
   padding-bottom: 20px;
 }
