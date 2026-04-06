@@ -1,5 +1,4 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // --- 1. DOM Elements ---
   const armBtn = document.getElementById("armBtn");
   const rebootBtn = document.getElementById("rebootBtn");
   const estopBtn = document.getElementById("estopBtn");
@@ -13,30 +12,30 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const playStopBtn = document.getElementById("playStopBtn");
   const playStopText = document.getElementById("playStopText");
-
   const webcamFeed = document.getElementById("webcamFeed");
 
-  // NEW: PID Tuning Elements
   const sendTuneBtn = document.getElementById("sendTuneBtn");
   const kpInput = document.getElementById("kpInput");
   const kiInput = document.getElementById("kiInput");
   const kdInput = document.getElementById("kdInput");
 
-  // --- Sparkline Setup ---
   const pitchChart = document.getElementById("pitchChart");
   const chartCtx = pitchChart ? pitchChart.getContext("2d") : null;
   const maxDataPoints = 150;
   let pitchHistory = new Array(maxDataPoints).fill(0);
 
-  // --- 2. Recording & Logging Variables ---
   let mediaRecorder;
   let recordedChunks = [];
   let isLoggingData = false;
   let telemetryLog = [];
   let recordingStartTime = 0;
 
-  // --- 3. WebSocket Setup ---
-  const gateway = `ws://192.168.4.1/ws`;
+  // --- RMS & TARE VARIABLES ---
+  const rmsWindowSize = 10;
+  let squaredErrors = [];
+  let initialPitchOffset = null; // Stores the "zero" point when the site loads
+
+  const gateway = `ws://${window.location.hostname}/ws`;
   let websocket = null;
   let reconnectTimer = null;
   let lastMessageTime = 0;
@@ -60,11 +59,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function initWebSocket() {
     if (websocket && websocket.readyState === WebSocket.OPEN) return;
-
     setStatus("connecting");
     websocket = new WebSocket(gateway);
 
-    websocket.onopen = () => setStatus("online");
+    websocket.onopen = () => {
+      setStatus("online");
+      initialPitchOffset = null; // Reset tare so it recalibrates on fresh connection
+    };
 
     websocket.onclose = () => {
       setStatus("offline");
@@ -86,63 +87,67 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const data = JSON.parse(event.data);
 
-        // Update UI using PITCH_FILTERED
-        if (typeof data.pitch_filtered === "number") {
-          pitchVal.innerHTML = `${data.pitch_filtered.toFixed(2)}&deg;`;
-          pitchHistory.push(data.pitch_filtered);
+        // 1. AUTOMATIC STARTUP TARE
+        // Captures the first angle received and treats it as 0.00°
+        if (initialPitchOffset === null && typeof data.pitch === "number") {
+          initialPitchOffset = data.pitch;
+        }
+
+        const displayPitch = data.pitch - (initialPitchOffset || 0);
+        const displayRawPitch =
+          (data.pitch_raw || 0) - (initialPitchOffset || 0);
+
+        // 2. RMS ERROR CALCULATION
+        let currentRmsError = 0.0;
+        if (
+          typeof data.pitch === "number" &&
+          typeof data.pitch_raw === "number"
+        ) {
+          let instError = data.pitch_raw - data.pitch;
+          squaredErrors.push(instError * instError);
+          if (squaredErrors.length > rmsWindowSize) squaredErrors.shift();
+          let sumSq = squaredErrors.reduce((a, b) => a + b, 0);
+          currentRmsError = Math.sqrt(sumSq / squaredErrors.length);
+
+          if (pitchVal) pitchVal.innerHTML = `${displayPitch.toFixed(2)}&deg;`;
+          pitchHistory.push(displayPitch);
           pitchHistory.shift();
           requestAnimationFrame(drawSparkline);
         }
-        if (typeof data.angular_velocity === "number") {
+
+        if (typeof data.angular_velocity === "number")
           safeSetText(velVal, `${data.angular_velocity.toFixed(2)} deg/s`);
-        }
-        if (typeof data.setpoint_error === "number") {
-          errorVal.innerHTML = `${data.setpoint_error.toFixed(2)}&deg;`;
-        }
-        if (typeof data.front_distance === "number") {
+        if (errorVal) errorVal.innerHTML = `${currentRmsError.toFixed(3)}&deg;`;
+        if (typeof data.front_distance === "number")
           safeSetText(fDistVal, `${data.front_distance.toFixed(2)} m`);
-        }
 
-        // --- DATA LOGGING ---
-        if (isLoggingData && typeof data.pitch_filtered === "number") {
+        // 3. TELEMETRY LOGGING (Using Zeroed Values)
+        if (isLoggingData && typeof data.pitch === "number") {
           const elapsedMs = (performance.now() - recordingStartTime).toFixed(0);
-          const vRaw =
-            typeof data.pitch_raw === "number"
-              ? data.pitch_raw.toFixed(2)
-              : "0.00";
-          const vFilt = data.pitch_filtered.toFixed(2);
-          const vVel =
-            typeof data.angular_velocity === "number"
-              ? data.angular_velocity.toFixed(2)
-              : "0.00";
-          const vErr =
-            typeof data.setpoint_error === "number"
-              ? data.setpoint_error.toFixed(2)
-              : "0.00";
-
-          telemetryLog.push([elapsedMs, vRaw, vFilt, vVel, vErr]);
+          telemetryLog.push([
+            elapsedMs,
+            displayRawPitch.toFixed(2),
+            displayPitch.toFixed(2),
+            data.angular_velocity ? data.angular_velocity.toFixed(2) : "0.00",
+            currentRmsError.toFixed(3),
+          ]);
         }
       } catch (e) {
-        console.error("Error parsing WebSocket JSON:", e, event.data);
+        console.error("Error parsing WebSocket JSON:", e);
       }
     };
   }
 
-  // --- Canvas Drawing Function ---
   function drawSparkline() {
     if (!chartCtx || !pitchChart) return;
-
     pitchChart.width = pitchChart.clientWidth;
     pitchChart.height = pitchChart.clientHeight;
-    const width = pitchChart.width;
-    const height = pitchChart.height;
-
+    const width = pitchChart.width,
+      height = pitchChart.height;
     chartCtx.clearRect(0, 0, width, height);
-
-    const maxPitch = 20;
-    const minPitch = -20;
-    const range = maxPitch - minPitch;
-
+    const maxPitch = 90,
+      minPitch = -90,
+      range = maxPitch - minPitch;
     const zeroY = height - ((0 - minPitch) / range) * height;
     chartCtx.strokeStyle = "rgba(255, 255, 255, 0.15)";
     chartCtx.lineWidth = 1;
@@ -150,19 +155,12 @@ document.addEventListener("DOMContentLoaded", () => {
     chartCtx.moveTo(0, zeroY);
     chartCtx.lineTo(width, zeroY);
     chartCtx.stroke();
-
     chartCtx.strokeStyle = "#f6f09c";
     chartCtx.lineWidth = 2;
-    chartCtx.lineJoin = "round";
     chartCtx.beginPath();
-
     for (let i = 0; i < maxDataPoints; i++) {
       const x = (i / (maxDataPoints - 1)) * width;
       let val = pitchHistory[i];
-
-      if (val > maxPitch) val = maxPitch;
-      if (val < minPitch) val = minPitch;
-
       const y = height - ((val - minPitch) / range) * height;
       if (i === 0) chartCtx.moveTo(x, y);
       else chartCtx.lineTo(x, y);
@@ -170,48 +168,36 @@ document.addEventListener("DOMContentLoaded", () => {
     chartCtx.stroke();
   }
 
-  // --- 4. Webcam Setup ---
   async function initCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       if (webcamFeed) webcamFeed.srcObject = stream;
-
       mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) recordedChunks.push(event.data);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
       };
-
       mediaRecorder.onstop = () => {
         const blob = new Blob(recordedChunks, { type: "video/webm" });
         recordedChunks = [];
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        document.body.appendChild(a);
-        a.style = "display: none";
         a.href = url;
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-        a.download = `pendulum_video_${timestamp}.webm`;
+        a.download = `pendulum_video_${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
         a.click();
-        window.URL.revokeObjectURL(url);
-        a.remove();
       };
     } catch (err) {
-      console.error("Error accessing webcam:", err);
+      console.error("Camera error:", err);
     }
   }
 
   function saveTelemetryCSV() {
     if (telemetryLog.length <= 1) return;
-
     let csvContent =
       "data:text/csv;charset=utf-8," +
-      telemetryLog.map((row) => row.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
+      telemetryLog.map((e) => e.join(",")).join("\n");
     const a = document.createElement("a");
-    a.setAttribute("href", encodedUri);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    a.setAttribute("download", `pendulum_data_${timestamp}.csv`);
+    a.href = encodeURI(csvContent);
+    a.download = `pendulum_data_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -219,17 +205,60 @@ document.addEventListener("DOMContentLoaded", () => {
 
   initCamera();
 
-  // --- 6. Button Logic ---
+  if (playStopBtn) {
+    playStopBtn.addEventListener("click", () => {
+      const isRecording = playStopBtn.classList.toggle("is-recording");
+      if (isRecording) {
+        if (mediaRecorder && mediaRecorder.state === "inactive") {
+          recordedChunks = [];
+          mediaRecorder.start();
+        }
+        isLoggingData = true;
+        recordingStartTime = performance.now();
+        squaredErrors = [];
+        telemetryLog = [
+          [
+            "Time (ms)",
+            "Raw Pitch (deg)",
+            "Filtered Pitch (deg)",
+            "Velocity (deg/s)",
+            "RMS Filter Error (deg)",
+          ],
+        ];
+      } else {
+        if (mediaRecorder && mediaRecorder.state === "recording")
+          mediaRecorder.stop();
+        isLoggingData = false;
+        saveTelemetryCSV();
+      }
+    });
+  }
+
+  if (sendTuneBtn) {
+    sendTuneBtn.addEventListener("click", () => {
+      const kp_val = parseFloat(kpInput.value);
+      const ki_val = parseFloat(kiInput.value);
+      const kd_val = parseFloat(kdInput.value);
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(
+          JSON.stringify({
+            command: "tune",
+            kp: kp_val,
+            ki: ki_val,
+            kd: kd_val,
+          }),
+        );
+      }
+    });
+  }
+
   if (armBtn) {
     armBtn.addEventListener("click", () => {
-      const isArmed = armBtn.classList.contains("is-armed");
-      if (isArmed) {
+      if (armBtn.classList.contains("is-armed")) {
         armBtn.classList.remove("is-armed");
-        armBtn.innerText = "ARM MOTORS";
         sendCommand("disarm");
       } else {
         armBtn.classList.add("is-armed");
-        armBtn.innerText = "DISARM SYSTEM";
         sendCommand("arm");
       }
     });
@@ -238,101 +267,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (estopBtn) {
     estopBtn.addEventListener("click", () => {
       sendCommand("estop");
-      if (armBtn) {
-        armBtn.classList.remove("is-armed");
-        armBtn.innerText = "ARM MOTORS";
-      }
-      alert("!! EMERGENCY STOP TRIGGERED !!");
+      if (armBtn) armBtn.classList.remove("is-armed");
     });
   }
 
   if (rebootBtn) {
     rebootBtn.addEventListener("click", () => {
       sendCommand("reboot");
-      rebootBtn.innerText = "INITIALIZING...";
-      rebootBtn.style.pointerEvents = "none";
-      setTimeout(() => {
-        rebootBtn.innerText = "REBOOT SYSTEM";
-        rebootBtn.style.pointerEvents = "auto";
-      }, 5000);
-    });
-  }
-
-  if (playStopBtn) {
-    playStopBtn.addEventListener("click", () => {
-      const isRecording = playStopBtn.classList.toggle("is-recording");
-      if (playStopText) {
-        playStopText.innerText = isRecording
-          ? "STOP RECORDING"
-          : "START RECORDING";
-      }
-
-      if (isRecording) {
-        if (mediaRecorder && mediaRecorder.state === "inactive") {
-          recordedChunks = [];
-          mediaRecorder.start();
-        }
-        isLoggingData = true;
-        recordingStartTime = performance.now();
-        telemetryLog = [
-          [
-            "Time (ms)",
-            "Raw Pitch (deg)",
-            "Filtered Pitch (deg)",
-            "Velocity (deg/s)",
-            "Error (deg)",
-          ],
-        ];
-      } else {
-        if (mediaRecorder && mediaRecorder.state === "recording") {
-          mediaRecorder.stop();
-        }
-        isLoggingData = false;
-        saveTelemetryCSV();
-      }
-    });
-  }
-
-  // NEW: Tuning Button Logic
-  if (sendTuneBtn) {
-    sendTuneBtn.addEventListener("click", () => {
-      // 1. Grab the values as floats
-      const kp_val = parseFloat(kpInput.value);
-      const ki_val = parseFloat(kiInput.value);
-      const kd_val = parseFloat(kdInput.value);
-
-      // 2. Validate the data (prevent sending bad data if a box is empty)
-      if (isNaN(kp_val) || isNaN(ki_val) || isNaN(kd_val)) {
-        alert("Please enter valid numbers for all PID values.");
-        return;
-      }
-
-      // 3. Send the custom JSON payload
-      if (websocket && websocket.readyState === WebSocket.OPEN) {
-        const payload = {
-          command: "tune",
-          kp: kp_val,
-          ki: ki_val,
-          kd: kd_val,
-        };
-        websocket.send(JSON.stringify(payload));
-
-        // Visual feedback to let you know it sent successfully
-        const originalText = sendTuneBtn.innerText;
-        sendTuneBtn.innerText = "SENT!";
-        sendTuneBtn.style.backgroundColor = "rgba(0, 213, 99, 0.2)";
-        sendTuneBtn.style.borderColor = "#00d563";
-        sendTuneBtn.style.color = "white";
-
-        setTimeout(() => {
-          sendTuneBtn.innerText = originalText;
-          sendTuneBtn.style.backgroundColor = "";
-          sendTuneBtn.style.borderColor = "";
-          sendTuneBtn.style.color = "";
-        }, 1000);
-      } else {
-        console.warn("WebSocket not connected. Cannot send tuning.");
-      }
     });
   }
 
