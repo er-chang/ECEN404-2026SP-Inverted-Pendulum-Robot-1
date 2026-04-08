@@ -7,7 +7,7 @@
 #include <string.h>
 #include <ESPmDNS.h>
 
-const char* WIFI_SSID = "tamu_iot";
+const char* WIFI_SSID = "TAMU_IoT";
 const char* WIFI_PASS = "";  
 
 AsyncWebServer server(80);
@@ -20,6 +20,7 @@ struct __attribute__((packed)) TelemetryPacket {
   float angular_velocity;
   float setpoint_error;
   float front_distance;
+  uint32_t cpu_work_us;
 };
 
 struct __attribute__((packed)) CommandPacket {
@@ -28,7 +29,7 @@ struct __attribute__((packed)) CommandPacket {
   float kp;
   float ki;
   float kd;
-  uint8_t padding2[4];
+  uint8_t padding2[8];
 };
 
 WORD_ALIGNED_ATTR TelemetryPacket rxTelemetry = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -85,7 +86,7 @@ void setup() {
 
   slave.setDataMode(SPI_MODE0);
   slave.begin(VSPI);
-  slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 20);
+  slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 24);
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
@@ -138,18 +139,19 @@ void loop() {
   if (slave.available()) {
     slave.pop();
     lastSpiReceive = now;
-    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 20);
+    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 24);
   }
 
   if (now - lastWsSend >= 100 && ws.count() > 0) {
     char json[300]; // Increased buffer size for extra field
     snprintf(json, sizeof(json),
-             "{\"pitch\":%.2f,\"pitch_raw\":%.2f,\"angular_velocity\":%.2f,\"setpoint_error\":%.2f,\"front_distance\":%.2f}",
+             "{\"pitch\":%.2f,\"pitch_raw\":%.2f,\"angular_velocity\":%.2f,\"setpoint_error\":%.2f,\"front_distance\":%.2f,\"cpu_work_us\":%lu}",
              esp_safe(rxTelemetry.pitch_filtered), 
              esp_safe(rxTelemetry.pitch_raw), // Added raw pitch here
              esp_safe(rxTelemetry.angular_velocity), 
              esp_safe(rxTelemetry.setpoint_error), 
-             esp_safe(rxTelemetry.front_distance));
+             esp_safe(rxTelemetry.front_distance), 
+             rxTelemetry.cpu_work_us);
     ws.textAll(json);
     lastWsSend = now;
   }
@@ -157,7 +159,7 @@ void loop() {
   if (now - lastSpiReceive > 1000) {
     slave.end();
     slave.begin(VSPI);
-    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 20);
+    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 24);
     lastSpiReceive = now;
     Serial.println("SPI timeout, restarting slave...");
   }

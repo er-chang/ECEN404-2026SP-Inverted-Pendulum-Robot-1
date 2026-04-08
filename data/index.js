@@ -87,11 +87,14 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const data = JSON.parse(event.data);
 
-        // 1. AUTOMATIC STARTUP TARE
+        // 1. AUTOMATIC STARTUP TARE - DISABLED FOR DEBUGGING
         // Captures the first angle received and treats it as 0.00°
-        if (initialPitchOffset === null && typeof data.pitch === "number") {
-          initialPitchOffset = data.pitch;
-        }
+        // if (initialPitchOffset === null && typeof data.pitch === "number") {
+        //   initialPitchOffset = data.pitch;
+        // }
+
+        // Force offset to 0 so the dashboard shows the TRUE absolute angle from the STM32
+        initialPitchOffset = 0;
 
         const displayPitch = data.pitch - (initialPitchOffset || 0);
         const displayRawPitch =
@@ -192,15 +195,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function saveTelemetryCSV() {
     if (telemetryLog.length <= 1) return;
-    let csvContent =
-      "data:text/csv;charset=utf-8," +
-      telemetryLog.map((e) => e.join(",")).join("\n");
+
+    // Create the CSV string
+    let csvContent = telemetryLog.map((e) => e.join(",")).join("\n");
+
+    // Package it as a Blob instead of a URI string
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
     const a = document.createElement("a");
-    a.href = encodeURI(csvContent);
+    a.href = url;
     a.download = `pendulum_data_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
     document.body.appendChild(a);
     a.click();
+
+    // Clean up to free memory
     document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   initCamera();
