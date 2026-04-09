@@ -88,7 +88,7 @@ TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
 static const float PI_OVER_180 = 3.14159265f / 180.0f;
-static const float PWM_SCALE = 200.0f;
+static const float PWM_SCALE = 240.0f;
 
 #if LOG_FLAG
 // ── DATA LOGGER (view in debugger Expressions) ──
@@ -304,7 +304,7 @@ int main(void)
 	  // Calibrate pot center — hold pendulum vertical during this!
 
 	  // Average 100 readings to find the ADC value at vertical
-#if true
+#if false
 
 	  uint32_t pot_sum = 0;
 
@@ -319,15 +319,14 @@ int main(void)
 	      HAL_ADC_Stop(&hadc3);
 
 	      HAL_Delay(2);
-	      printf("\n\nPOT SUM: %lu\n\n", pot_sum);
 
 	  }
 
 	  uint16_t pot_center = (uint16_t)(pot_sum / 2000);
-	  //printf("\n\nCENTER VALUE: %u\n\n", pot_center);
+	  printf("\n\nCENTER VALUE: %u\n\n", pot_center);
 #endif
 
-
+	  uint16_t pot_center = 1326;
 
 	  // Pot conversion: 12-bit (0-4095), 270° range
 
@@ -355,9 +354,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
 		  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
-
-
-#if false
+#if true
 		  // ── Measure REAL dt ──
 
 		  dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
@@ -402,9 +399,9 @@ int main(void)
 
 
 
-		  motor_effort = (30.0f * theta)
-		               + (0.5f * theta_dot)
-		               + (0.02f * balance_integral);
+		  motor_effort = (30.0f * theta);
+		               //+ (0.5f * theta_dot)
+		               //+ (0.02f * balance_integral);
 
 
 
@@ -535,7 +532,7 @@ static void MX_ADC3_Init(void)
 
   /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
   */
-  sConfig.Channel = ADC_CHANNEL_9;
+  sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc3, &sConfig) != HAL_OK)
@@ -796,24 +793,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PF0 PF1 PF2 PF4
-                           PF5 PF6 PF7 PF8
-                           PF9 PF10 PF11 PF12
-                           PF15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_4
-                          |GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8
-                          |GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12
-                          |GPIO_PIN_15;
+  /*Configure GPIO pins : PF0 PF1 PF2 PF3
+                           PF4 PF5 PF6 PF7
+                           PF8 PF9 PF10 PF11
+                           PF12 PF15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3
+                          |GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7
+                          |GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11
+                          |GPIO_PIN_12|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA1 PA2 PA3 PA8
-                           PA9 PA10 PA11 PA12
-                           PA15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_8
-                          |GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12
-                          |GPIO_PIN_15;
+  /*Configure GPIO pins : PA2 PA3 PA8 PA9
+                           PA10 PA11 PA12 PA15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_8|GPIO_PIN_9
+                          |GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
