@@ -8,6 +8,9 @@
 
 
 /*Defines*/
+#define IMU_FLAG false
+#define LOG_FLAG false
+
 #define MOTOR_MAX_SPEED 256 // Maximum CCR value for PWM channels
 #define MOTOR_MIN_SPEED 0 // Minimum CCR value for PWM channels
 #define IMU_ADDR 0x6A // Memory address of the IMU
@@ -119,6 +122,7 @@ void setSpeed(Motor* motor, uint32_t speed, GPIO_PinState direction){
 }
 
 
+#if IMU_FLAG
 /*Accelerometer Read Function*/
 void Read_Accel(IMU* imu, I2C_HandleTypeDef* i2c)
 {
@@ -283,6 +287,7 @@ void IMU_Init(IMU* imu, I2C_HandleTypeDef* i2c){
 		Calibrate_Gyro(imu, i2c, 50);  // ~100ms, robot must be still
 }
 /* End IMU INIT FUNCTION*/
+#endif
 
 #endif /* PERIPHERALS_H */
 
