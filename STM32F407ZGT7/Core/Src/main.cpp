@@ -411,9 +411,6 @@ int main(void)
 
 		  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
 
-		  if (fabs(motor_effort) < 0.01f) final_speed = 0;
-
-
 
 		  drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
 
@@ -680,7 +677,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 167;
+  htim2.Init.Prescaler = 83;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
