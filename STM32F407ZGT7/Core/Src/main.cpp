@@ -45,6 +45,8 @@
 
 #include <math.h>
 
+#include "navigation.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +58,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define BALANCING_MODE 0  // set to 1 for nav w/ rod, 0 for w/o rod
 #define MAX_SPEED 1023
 #define MIN_SPEED 0
 #define PWM_DEADZONE 68
@@ -87,6 +89,8 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
+Nav my_nav;
+float gyro_z_bias = 0.0f;
 static const float PI_OVER_180 = 3.14159265f / 180.0f;
 static const float PWM_SCALE = 240.0f;
 
@@ -176,6 +180,7 @@ static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 int _write(int32_t file, uint8_t *ptr, int32_t len);
+void Trigger_Ultrasonic_Sensors(void);
 
 /* USER CODE END PFP */
 
@@ -288,20 +293,31 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
+  Nav_Init(&my_nav);
+  // IMU CALIBRATION
+
 	  // Start timers
-
 	  HAL_TIM_Base_Start(&htim2);
-
 	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-
 	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-
 	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
-
 	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 
+	#if IMU_FLAG
+	  // Initialize and Calibrate IMU
+	  IMU_Init(&imu, &hi2c1);
 
-	  // Calibrate pot center — hold pendulum vertical during this!
+	  float z_bias_sum = 0.0f;
+	  int samples = 200;
+	  for(int i = 0; i < samples; i++) {
+		  Read_IMU(&imu, &hi2c1);
+		  if(imu.status == HAL_OK) {
+			  z_bias_sum += imu.gyro.dps_z;
+		  }
+		  HAL_Delay(2);
+	  }
+	  gyro_z_bias = z_bias_sum / (float)samples;
+	#endif
 
 	  // Average 100 readings to find the ADC value at vertical
 #if false
@@ -351,94 +367,85 @@ int main(void)
 
     /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
+		  /* USER CODE BEGIN 3 */
+		      uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
+		      static uint8_t sensor_timer = 0; // Tracks when to fire the sonars
 
-		  uint32_t loop_start = __HAL_TIM_GET_COUNTER(&htim2);
-#if true
-		  // ── Measure REAL dt ──
+		  #if true
+		      // ── Measure REAL dt ──
+		      dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
+		      if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
+		      prev_time = loop_start;
 
-		  dt = (prev_time == 0) ? 0.002f : (float)(loop_start - prev_time) * 1e-6f;
+		      // ── 1. READ POTENTIOMETER ──
+		      HAL_ADC_Start(&hadc3);
+		      HAL_ADC_PollForConversion(&hadc3, 1);
+		      uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
+		      HAL_ADC_Stop(&hadc3);
 
-		  if (dt > 0.02f || dt < 0.0005f) dt = 0.002f;
+		      static float prev_theta = 0.0f;
+		      theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
+		      theta_dot = (theta - prev_theta) / dt;
+		      prev_theta = theta;
 
-		  prev_time = loop_start;
+		      // ── 2. READ IMU FOR YAW RATE ──
+		      float current_gyro_z = 0.0f; // Declared ONCE outside the #if block
+		  #if IMU_FLAG
+		      Read_IMU(&imu, &hi2c1);
+		      if (imu.status == HAL_OK) {
+		          current_gyro_z = imu.gyro.dps_z - gyro_z_bias;
+		      }
+		  #endif
 
+		      // ── 3. SENSOR TRIGGER & DISTANCE MATH ──
+		      sensor_timer++;
+		      if (sensor_timer >= 20) { // Fire sensors roughly every 20ms (50Hz)
+		          Trigger_Ultrasonic_Sensors();
+		          sensor_timer = 0;
+		      }
 
+		      // Convert microseconds to meters (prevent negative underflow)
+		      if (frontSensor.echo_end > frontSensor.echo_start)
+		          frontSensor.distance = (float)(frontSensor.echo_end - frontSensor.echo_start) / 5800.0f;
+		      if (leftSensor.echo_end > leftSensor.echo_start)
+		          leftSensor.distance  = (float)(leftSensor.echo_end - leftSensor.echo_start) / 5800.0f;
+		      if (rightSensor.echo_end > rightSensor.echo_start)
+		          rightSensor.distance = (float)(rightSensor.echo_end - rightSensor.echo_start) / 5800.0f;
 
-		  // ── 1. READ POTENTIOMETER (~5µs, zero lag, no filter needed) ──
+		      // ── 4. AUTONOMOUS NAVIGATION ──
+		      Nav_UpdateStrategy(&my_nav, frontSensor.distance, leftSensor.distance, rightSensor.distance);
+		      float turn_effort = Nav_UpdateSteering(&my_nav, current_gyro_z, dt);
 
-		  HAL_ADC_Start(&hadc3);
+		      // ── 5. MOTOR MIXING ──
+		  #if BALANCING_MODE
+		      float pitch_effort = (30.0f * theta);
+		  #else
+		      float pitch_effort = 0.0f;
+		  #endif
 
-		  HAL_ADC_PollForConversion(&hadc3, 1);
+		      float left_total  = pitch_effort + turn_effort;
+		      float right_total = pitch_effort - turn_effort;
 
-		  uint16_t pot_raw = (uint16_t)HAL_ADC_GetValue(&hadc3);
+		      // ── 6. ACTUATION ──
+		      int left_speed  = (int)(fabs(left_total) * PWM_SCALE) + PWM_DEADZONE;
+		      int right_speed = (int)(fabs(right_total) * PWM_SCALE) + PWM_DEADZONE;
 
-		  HAL_ADC_Stop(&hadc3);
+		      if (left_speed > MAX_SPEED) left_speed = MAX_SPEED;
+		      if (right_speed > MAX_SPEED) right_speed = MAX_SPEED;
 
+		      GPIO_PinState left_dir  = (left_total > 0)  ? GPIO_PIN_SET : GPIO_PIN_RESET;
+		      GPIO_PinState right_dir = (right_total > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
 
+		      setSpeed(&FLM, left_speed, left_dir);
+		      setSpeed(&BLM, left_speed, left_dir);
+		      setSpeed(&FRM, right_speed, right_dir);
+		      setSpeed(&BRM, right_speed, right_dir);
 
-		  static float prev_theta = 0.0f;
-
-		  theta = ((float)pot_raw - (float)pot_center) * POT_RAD_PER_COUNT;
-
-		  theta_dot = (theta - prev_theta) / dt;
-
-		  prev_theta = theta;
-
-
-
-		  #define WINDOW_SIZE 2
-		  static float window[WINDOW_SIZE] = {0};
-		  static int window_idx = 0;
-
-		  // Proper integral: error × time, recalculated each pass
-		  window[window_idx] = theta * dt;
-		  window_idx = (window_idx + 1) % WINDOW_SIZE;
-		  balance_integral = 0.0f;
-		  for (int i = 0; i < WINDOW_SIZE; i++) balance_integral += window[i];
-
-
-
-		  motor_effort = (30.0f * theta);
-		               //+ (0.5f * theta_dot)
-		               //+ (0.02f * balance_integral);
-
-
-
-		  // ── 3. ACTUATION ──
-
-		  final_speed = (int)(fabs(motor_effort) * PWM_SCALE) + PWM_DEADZONE;
-
-		  if (final_speed > MAX_SPEED) final_speed = MAX_SPEED;
-
-
-		  drive_dir = (motor_effort > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-
-
-
-		  setSpeed(&FLM, final_speed, drive_dir);
-		  setSpeed(&FRM, final_speed, drive_dir);
-		  setSpeed(&BLM, final_speed, drive_dir);
-		  setSpeed(&BRM, final_speed, drive_dir);
-
-#if LOG_FLAG
-		  // ── LOG DATA (zero overhead — just array writes) ──
-		  if (!log_done && log_idx < LOG_SIZE) {
-		      log_theta[log_idx] = theta;
-		      log_effort[log_idx] = motor_effort;
-		      log_idx++;
-		  }
-
-		  // Buffer wraps around when full — always has the latest 500 samples
-		  if (log_idx >= LOG_SIZE) log_idx = 0;
-#endif
-		  // ── Spin-wait for exact 2ms loop period (500Hz) ──
-#endif
-		  while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
- }
-
-
-  /* USER CODE END 3 */
+		  #endif
+		      // ── Spin-wait for exact loop period ──
+		      while ((__HAL_TIM_GET_COUNTER(&htim2) - loop_start) < LOOP_PERIOD_US);
+          } // <--- THIS IS THE MISSING BRACE THAT WAS ADDED!
+		  /* USER CODE END 3 */
 }
 
 /**
@@ -887,9 +894,26 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void Trigger_Ultrasonic_Sensors(void) {
+    // pull all trigger pins HIGH simultaneously
+    HAL_GPIO_WritePin(frontSensor.TriggerPort, frontSensor.TriggerPin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(leftSensor.TriggerPort, leftSensor.TriggerPin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(rightSensor.TriggerPort, rightSensor.TriggerPin, GPIO_PIN_SET);
+
+    // wait exactly 10 us using 1MHz timer
+    uint32_t start_time = __HAL_TIM_GET_COUNTER(&htim2);
+    while ((__HAL_TIM_GET_COUNTER(&htim2) - start_time) < 10);
+
+    // pull all trigger pins LOW to fire the sound wave
+    HAL_GPIO_WritePin(frontSensor.TriggerPort, frontSensor.TriggerPin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(leftSensor.TriggerPort, leftSensor.TriggerPin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(rightSensor.TriggerPort, rightSensor.TriggerPin, GPIO_PIN_RESET);
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 
 // External interrupt handler
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -961,7 +985,7 @@ void Error_Handler(void)
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
+  * where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None
