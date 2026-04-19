@@ -21,25 +21,61 @@
       <div class="item item-1">
         <h4>>> CONFIG.</h4>
         <div class="button-container">
-          <button id="armBtn" class="button-40 btn-arm" role="button">
-            ARM MOTORS
-          </button>
+          <div class="control-card">
+            <div class="play-mode-row">
+              <button id="playStopBtn" class="btn-recording-box" role="button">
+                <div class="icon-container-box">
+                  <span class="play-stop-icon-box"></span>
+                </div>
+              </button>
 
-          <button id="rebootBtn" class="button-40 btn-reboot" role="button">
-            REBOOT STM32
-          </button>
+              <div class="segmented-control">
+                <input
+                  type="radio"
+                  name="mode-select"
+                  id="mode-1"
+                  value="0"
+                  onchange="setMode(0)"
+                  checked
+                />
+                <label for="mode-1">1</label>
+
+                <input
+                  type="radio"
+                  name="mode-select"
+                  id="mode-2"
+                  value="1"
+                  onchange="setMode(1)"
+                />
+                <label for="mode-2">2</label>
+
+                <input
+                  type="radio"
+                  name="mode-select"
+                  id="mode-3"
+                  value="2"
+                  onchange="setMode(2)"
+                />
+                <label for="mode-3">3</label>
+
+                <div class="slider"></div>
+              </div>
+            </div>
+
+            <p class="mode-notes">
+              <strong style="color: red; font-weight: bold">*Note</strong><br />
+              <strong style="font-weight: bold">1:</strong> Balancing Only<br />
+              <strong style="font-weight: bold">2:</strong> Balancing + Sonar<br />
+              <strong style="font-weight: bold">3:</strong> Driving w/o rod
+            </p>
+          </div>
 
           <button id="estopBtn" class="button-40 btn-estop" role="button">
             EMERGENCY STOP
           </button>
-
-          <button id="playStopBtn" class="btn-recording-box" role="button">
-            <div class="icon-container-box">
-              <span class="play-stop-icon-box"></span>
-            </div>
-          </button>
         </div>
       </div>
+
       <div class="item item-2">
         <h4>>> DYNAMICS & STABILITY</h4>
         <ul class="data-list">
@@ -47,7 +83,6 @@
           <li>ang. velocity<b id="velVal"> 0.0 rad/s</b></li>
           <li>rms filter error<b id="errorVal"> -- </b></li>
           <li>stability margin<b id="stabilityVal">-- ;</b></li>
-          <li>jerk<b id="jerkVal">-- ;</b></li>
         </ul>
 
         <div
@@ -152,6 +187,7 @@
           </button>
         </div>
       </div>
+
       <div class="item item-3">
         <h4>>> NAVIGATION & MOTION</h4>
         <ul class="data-list">
@@ -159,11 +195,24 @@
           <li class="sub-item">&#x21B3; l-dist. <b id="lDistVal">-- </b></li>
           <li class="sub-item">&#x21B3; f-dist. <b id="fDistVal">0.00 m</b></li>
           <li class="sub-item">&#x21B3; r-dist. <b id="rDistVal">-- </b></li>
-          <li>linear velocity<b id="linVelVal">-- </b></li>
-          <li>wheel rpm<b id="rpmVal">-- </b></li>
-          <li>total dist.<b id="total_dist_Val">-- </b></li>
+          <div class="metric-card">
+            <h3>Wheel RPM</h3>
+            <span id="val-rpm" style="color: #f6f09c">0.00</span> RPM
+          </div>
+          <div class="metric-card">
+            <h3>Linear Velocity</h3>
+            <span id="val-velocity" style="color: #f6f09c">0.00</span> m/s
+          </div>
         </ul>
+        <div class="section-container">
+          <h4 class="section-header">>> ODOMETRY</h4>
+          <div class="data-row">
+            <span>x,y coord.</span>
+            <b id="odometryVal">0.00, 0.00</b>
+          </div>
+        </div>
       </div>
+
       <div class="item item-4">
         <h4>>> SYS. INTEGRITY</h4>
         <ul class="data-list">

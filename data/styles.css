@@ -165,9 +165,7 @@ h3 {
 h4 {
   font-family: "Victor Mono", monospace;
   font-optical-sizing: auto;
-  font-weight: 100;
   font-style: normal;
-  font-size: small;
   font-size: 0.9em;
   font-weight: 700;
   color: #8d99ae;
@@ -204,7 +202,7 @@ h4 {
   width: calc(50vw - 2em);
   height: 83%;
   margin-right: 1%;
-  grid-template-rows: 8fr 2fr; /*repeat(2, 1fr);*/
+  grid-template-rows: 8fr 2fr;
   grid-template-columns: repeat(3, 1fr);
   gap: 1em;
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -301,6 +299,44 @@ h4 {
   color: rgba(255, 255, 255, 0.9);
 }
 
+.metric-card h3 {
+  margin: 10px 0 2px 0;
+  font-size: 0.8rem;
+  color: #8d99ae;
+}
+
+/*odometry section*/
+.section-container {
+  margin-top: 20px;
+  padding: 0 1rem;
+  width: 100%;
+}
+
+.section-header {
+  margin: 0 0 10px 0 !important;
+  padding-left: 0 !important;
+  color: #8d99ae;
+  font-family: "Victor Mono", monospace;
+  font-size: 0.9em;
+  font-weight: 700;
+}
+
+.data-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  text-transform: lowercase;
+  font-size: small;
+  color: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.data-row b {
+  color: #f6f09c;
+  font-size: small;
+}
+
 /* =========================================
    7. GRID POSITIONING
    ========================================= */
@@ -368,6 +404,7 @@ h4 {
   background-color: rgba(255, 0, 0, 0.2);
   border: 1px solid red;
   color: white;
+  margin-bottom: 20px;
 }
 .btn-estop:hover {
   background-color: red;
@@ -473,6 +510,88 @@ h4 {
   border-color: #ea404d;
 }
 
+/* =========================================
+   PLAY BUTTON & SEGMENTED CONTROL LAYOUT
+   ========================================= */
+.play-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 15px;
+  margin-bottom: 12px;
+}
+
+.segmented-control {
+  position: relative;
+  display: flex;
+  width: 180px; /* Smaller width */
+  background-color: #e0e0e0;
+  border-radius: 20px;
+  padding: 4px;
+  margin: 0;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.segmented-control input[type="radio"] {
+  display: none;
+}
+
+.segmented-control label {
+  flex: 1;
+  text-align: center;
+  padding: 6px 0;
+  font-size: 0.9em;
+  font-weight: bold;
+  color: #555;
+  cursor: pointer;
+  z-index: 2;
+  transition: color 0.3s ease;
+}
+
+.slider {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  height: calc(100% - 8px);
+  width: calc(33.33% - 2.6px);
+  background-color: #fff;
+  border-radius: 16px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  z-index: 1;
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* Animation Logic */
+#mode-1:checked ~ .slider {
+  transform: translateX(0%);
+}
+#mode-2:checked ~ .slider {
+  transform: translateX(100%);
+}
+#mode-3:checked ~ .slider {
+  transform: translateX(200%);
+}
+
+/* Text color change when active */
+#mode-1:checked ~ label[for="mode-1"],
+#mode-2:checked ~ label[for="mode-2"],
+#mode-3:checked ~ label[for="mode-3"] {
+  color: #007bff;
+}
+
+.mode-notes {
+  font-size: 0.85em;
+  color: black;
+  text-align: left;
+  margin-top: 15px;
+  padding: 10px;
+  background: #f1faee;
+  border-left: 5px solid #007bff;
+}
+
+/* =========================================
+   GRID AREAS CONT.
+   ========================================= */
 .item-2 {
   grid-area: 1 / 2 / 3 / 3;
   display: flex;
@@ -507,8 +626,8 @@ h4 {
 
 .sparkline-container h4 {
   position: absolute;
-  top: 10px; /* Pins it to the top */
-  left: 10px; /* Pins it to the left */
+  top: 10px;
+  left: 10px;
   z-index: 10;
   background: rgba(0, 0, 0, 0.5);
   padding: 2px 8px;
@@ -518,8 +637,8 @@ h4 {
 #pitchChart {
   width: 100%;
   height: 100%;
-  flex-grow: 1; /* Forces the canvas to fill the empty space */
-  display: block; /* Removes tiny margins below canvas */
+  flex-grow: 1;
+  display: block;
 }
 
 .item-4 h4,
@@ -541,14 +660,14 @@ h4 {
   background: rgba(0, 0, 0, 0.5);
   padding: 2px 8px;
   border-radius: 4px;
-  color: #ea404d; /* Adds the red text color */
+  color: #ea404d;
 }
 
 #webcamFeed {
   width: 100%;
   height: 100%;
-  object-fit: cover; /* Crops the video slightly to fill the box without squishing */
+  object-fit: cover;
   background-color: #000;
   border-radius: 0 0 4px 4px;
-  opacity: 0.85; /* Blends slightly with the dark theme */
+  opacity: 0.85;
 }

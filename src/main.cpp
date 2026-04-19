@@ -14,6 +14,7 @@ AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 ESP32SPISlave slave;
 
+// 1. Updated to match STM32 size (44 bytes)
 struct __attribute__((packed)) TelemetryPacket {
   float pitch_raw;
   float pitch_filtered;
@@ -21,19 +22,27 @@ struct __attribute__((packed)) TelemetryPacket {
   float setpoint_error;
   float front_distance;
   uint32_t cpu_work_us;
+  
+  float pos_x;
+  float pos_y;
+  float linear_velocity;
+  float total_dist;
+  float wheel_rpm; 
 };
 
+// 2. Updated to include Mode and padded to exactly 44 bytes
 struct __attribute__((packed)) CommandPacket {
   uint8_t command;
-  uint8_t padding1[3];
+  uint8_t mode;
+  uint8_t padding1[2];
   float kp;
   float ki;
   float kd;
-  uint8_t padding2[8];
+  uint8_t padding2[28]; 
 };
 
-WORD_ALIGNED_ATTR TelemetryPacket rxTelemetry = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-WORD_ALIGNED_ATTR CommandPacket txCommand = {0, {0}, 0.0f, 0.0f, 0.0f, {0}};
+WORD_ALIGNED_ATTR TelemetryPacket rxTelemetry = {};
+WORD_ALIGNED_ATTR CommandPacket txCommand = {};
 
 unsigned long lastWsCleanup  = 0;
 unsigned long lastWsSend     = 0;
@@ -63,11 +72,20 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
       const char *cmd = doc["command"];
       if (cmd == nullptr) return;
 
-      if (strcmp(cmd, "arm") == 0) setCommandPacket('A');
-      else if (strcmp(cmd, "disarm") == 0 || strcmp(cmd, "estop") == 0) setCommandPacket('E');
-      else if (strcmp(cmd, "clear") == 0) clearCommandPacket();
-      else if (strcmp(cmd, "reboot") == 0) ESP.restart();
-
+      if (strcmp(cmd, "arm") == 0) {
+          setCommandPacket('A');
+      } 
+      else if (strcmp(cmd, "estop") == 0) {
+          setCommandPacket('E'); 
+      } 
+      else if (strcmp(cmd, "clear") == 0) {
+          clearCommandPacket();
+      } 
+      else if (strcmp(cmd, "set_mode") == 0) {
+          txCommand.command = 'M';
+          txCommand.mode = doc["mode"].as<uint8_t>();
+          Serial.printf("Mode switched to: %d\n", txCommand.mode);
+      } 
       else if (strcmp(cmd, "tune") == 0) {
         txCommand.command = 'T';
         txCommand.kp = doc["kp"].as<float>();
@@ -86,7 +104,7 @@ void setup() {
 
   slave.setDataMode(SPI_MODE0);
   slave.begin(VSPI);
-  slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 24);
+  slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, sizeof(TelemetryPacket));
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
@@ -111,11 +129,9 @@ void setup() {
     Serial.println("\nFailed to connect, falling back to AP mode");
     WiFi.mode(WIFI_AP);
     WiFi.softAP("IPR", "password", 6);
-    Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
   }
 
   if (MDNS.begin("ipr")) {
-    Serial.println("MDNS responder started");
     MDNS.addService("http", "tcp", 80);
   }
 
@@ -139,19 +155,21 @@ void loop() {
   if (slave.available()) {
     slave.pop();
     lastSpiReceive = now;
-    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 24);
+    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, sizeof(TelemetryPacket));
   }
 
-  if (now - lastWsSend >= 100 && ws.count() > 0) {
-    char json[300]; // Increased buffer size for extra field
+  if (now - lastWsSend >= 50 && ws.count() > 0) {
+    char json[400]; 
     snprintf(json, sizeof(json),
-             "{\"pitch\":%.2f,\"pitch_raw\":%.2f,\"angular_velocity\":%.2f,\"setpoint_error\":%.2f,\"front_distance\":%.2f,\"cpu_work_us\":%lu}",
+             "{\"pitch\":%.2f,\"pitch_raw\":%.2f,\"angular_velocity\":%.2f,\"setpoint_error\":%.2f,\"front_distance\":%.2f,\"cpu_work_us\":%lu,\"rpm\":%.2f,\"velocity\":%.2f}",
              esp_safe(rxTelemetry.pitch_filtered), 
-             esp_safe(rxTelemetry.pitch_raw), // Added raw pitch here
+             esp_safe(rxTelemetry.pitch_raw), 
              esp_safe(rxTelemetry.angular_velocity), 
              esp_safe(rxTelemetry.setpoint_error), 
              esp_safe(rxTelemetry.front_distance), 
-             rxTelemetry.cpu_work_us);
+             rxTelemetry.cpu_work_us,
+             esp_safe(rxTelemetry.wheel_rpm),        
+             esp_safe(rxTelemetry.linear_velocity)); 
     ws.textAll(json);
     lastWsSend = now;
   }
@@ -159,9 +177,8 @@ void loop() {
   if (now - lastSpiReceive > 1000) {
     slave.end();
     slave.begin(VSPI);
-    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, 24);
+    slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, sizeof(TelemetryPacket));
     lastSpiReceive = now;
-    Serial.println("SPI timeout, restarting slave...");
   }
   vTaskDelay(1);
 }

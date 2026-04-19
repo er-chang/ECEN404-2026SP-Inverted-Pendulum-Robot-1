@@ -1,6 +1,6 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const armBtn = document.getElementById("armBtn");
-  const rebootBtn = document.getElementById("rebootBtn");
+  const trimFwdBtn = document.getElementById("trimFwdBtn");
+  const trimBwdBtn = document.getElementById("trimBwdBtn");
   const estopBtn = document.getElementById("estopBtn");
   const statusIndicator = document.getElementById("statusIndicator");
 
@@ -30,10 +30,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let telemetryLog = [];
   let recordingStartTime = 0;
 
-  // --- RMS & TARE VARIABLES ---
   const rmsWindowSize = 10;
   let squaredErrors = [];
-  let initialPitchOffset = null; // Stores the "zero" point when the site loads
+  let initialPitchOffset = null;
 
   const gateway = `ws://${window.location.hostname}/ws`;
   let websocket = null;
@@ -57,6 +56,19 @@ document.addEventListener("DOMContentLoaded", () => {
     websocket.send(JSON.stringify({ command }));
   }
 
+  // --- NEW: Mode Switching Function ---
+  window.setMode = function (modeValue) {
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.send(
+        JSON.stringify({
+          command: "set_mode",
+          mode: modeValue,
+        }),
+      );
+      console.log("Mode switched to: " + modeValue);
+    }
+  };
+
   function initWebSocket() {
     if (websocket && websocket.readyState === WebSocket.OPEN) return;
     setStatus("connecting");
@@ -64,7 +76,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     websocket.onopen = () => {
       setStatus("online");
-      initialPitchOffset = null; // Reset tare so it recalibrates on fresh connection
+      initialPitchOffset = null;
     };
 
     websocket.onclose = () => {
@@ -87,20 +99,12 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const data = JSON.parse(event.data);
 
-        // 1. AUTOMATIC STARTUP TARE - DISABLED FOR DEBUGGING
-        // Captures the first angle received and treats it as 0.00°
-        // if (initialPitchOffset === null && typeof data.pitch === "number") {
-        //   initialPitchOffset = data.pitch;
-        // }
-
-        // Force offset to 0 so the dashboard shows the TRUE absolute angle from the STM32
         initialPitchOffset = 0;
 
         const displayPitch = data.pitch - (initialPitchOffset || 0);
         const displayRawPitch =
           (data.pitch_raw || 0) - (initialPitchOffset || 0);
 
-        // 2. RMS ERROR CALCULATION
         let currentRmsError = 0.0;
         if (
           typeof data.pitch === "number" &&
@@ -124,7 +128,6 @@ document.addEventListener("DOMContentLoaded", () => {
         if (typeof data.front_distance === "number")
           safeSetText(fDistVal, `${data.front_distance.toFixed(2)} m`);
 
-        // 3. TELEMETRY LOGGING (Using Zeroed Values)
         if (isLoggingData && typeof data.pitch === "number") {
           const elapsedMs = (performance.now() - recordingStartTime).toFixed(0);
           telemetryLog.push([
@@ -134,6 +137,13 @@ document.addEventListener("DOMContentLoaded", () => {
             data.angular_velocity ? data.angular_velocity.toFixed(2) : "0.00",
             currentRmsError.toFixed(3),
           ]);
+        }
+        if (document.getElementById("val-rpm")) {
+          document.getElementById("val-rpm").innerText = data.rpm.toFixed(2);
+        }
+        if (document.getElementById("val-velocity")) {
+          document.getElementById("val-velocity").innerText =
+            data.velocity.toFixed(2);
         }
       } catch (e) {
         console.error("Error parsing WebSocket JSON:", e);
@@ -152,12 +162,14 @@ document.addEventListener("DOMContentLoaded", () => {
       minPitch = -90,
       range = maxPitch - minPitch;
     const zeroY = height - ((0 - minPitch) / range) * height;
+
     chartCtx.strokeStyle = "rgba(255, 255, 255, 0.15)";
     chartCtx.lineWidth = 1;
     chartCtx.beginPath();
     chartCtx.moveTo(0, zeroY);
     chartCtx.lineTo(width, zeroY);
     chartCtx.stroke();
+
     chartCtx.strokeStyle = "#f6f09c";
     chartCtx.lineWidth = 2;
     chartCtx.beginPath();
@@ -195,21 +207,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function saveTelemetryCSV() {
     if (telemetryLog.length <= 1) return;
-
-    // Create the CSV string
     let csvContent = telemetryLog.map((e) => e.join(",")).join("\n");
-
-    // Package it as a Blob instead of a URI string
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-
     const a = document.createElement("a");
     a.href = url;
     a.download = `pendulum_data_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
     document.body.appendChild(a);
     a.click();
-
-    // Clean up to free memory
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
@@ -220,6 +225,9 @@ document.addEventListener("DOMContentLoaded", () => {
     playStopBtn.addEventListener("click", () => {
       const isRecording = playStopBtn.classList.toggle("is-recording");
       if (isRecording) {
+        // --- NEW: Arm the robot ---
+        sendCommand("arm");
+
         if (mediaRecorder && mediaRecorder.state === "inactive") {
           recordedChunks = [];
           mediaRecorder.start();
@@ -237,6 +245,9 @@ document.addEventListener("DOMContentLoaded", () => {
           ],
         ];
       } else {
+        // --- NEW: Stop the robot ---
+        sendCommand("estop");
+
         if (mediaRecorder && mediaRecorder.state === "recording")
           mediaRecorder.stop();
         isLoggingData = false;
@@ -263,28 +274,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  if (armBtn) {
-    armBtn.addEventListener("click", () => {
-      if (armBtn.classList.contains("is-armed")) {
-        armBtn.classList.remove("is-armed");
-        sendCommand("disarm");
-      } else {
-        armBtn.classList.add("is-armed");
-        sendCommand("arm");
-      }
-    });
-  }
-
   if (estopBtn) {
     estopBtn.addEventListener("click", () => {
       sendCommand("estop");
-      if (armBtn) armBtn.classList.remove("is-armed");
-    });
-  }
-
-  if (rebootBtn) {
-    rebootBtn.addEventListener("click", () => {
-      sendCommand("reboot");
+      if (playStopBtn) playStopBtn.classList.remove("is-recording");
     });
   }
 
