@@ -1,4 +1,4 @@
-# Inverted-Pendulum-Robot-1
-# This is the repository for the CAPSTONE project stated above.
-# This is where all code and project files should go.
-# Try to backup your files to this repository once a week.
+# This includes the full design files for the robot's power regulation syste, consisting of a 5V buck converter and a 3.3 V low-dropout regulator
+# 5V buck converter: designed using the LM2596 switching regulator to efficiently step down the 3S LiPo battery (11.1V) to a stable 5V rail. The design includes an inductor, Schottky diode, and input/output capacitors selected to minimize ripple and support high current loads for motors and control electronics.
+# 3.3V LDO Regulator: based on the TLV6733, this stage provides a clean and stable 3.3V output for sensitive components such as the microcontroller and sensors. The LDO is powered from the 5V rail and includes proper decoupling capacitors for noise reduction
+# Design files: schematics, PCB layouts, and supporting files from Altium are included for both regulators. These files were created to ensure reliable power distribution across subsystems and to support both high current and low noise requirements of the robot. 
