@@ -19,13 +19,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const kiInput = document.getElementById("kiInput");
   const kdInput = document.getElementById("kdInput");
 
+  const armMotorsBtn = document.getElementById("armMotorsBtn");
+
   const pitchChart = document.getElementById("pitchChart");
   const chartCtx = pitchChart ? pitchChart.getContext("2d") : null;
   const maxDataPoints = 150;
   let pitchHistory = new Array(maxDataPoints).fill(0);
 
-  let mediaRecorder;
-  let recordedChunks = [];
   let isLoggingData = false;
   let telemetryLog = [];
   let recordingStartTime = 0;
@@ -38,6 +38,28 @@ document.addEventListener("DOMContentLoaded", () => {
   let websocket = null;
   let reconnectTimer = null;
   let lastMessageTime = 0;
+
+  const consoleOutput = document.getElementById("consoleOutput");
+
+  function logToConsole(msg, type = "info") {
+    if (!consoleOutput) return;
+
+    const div = document.createElement("div");
+    div.className = `console-msg console-${type}`;
+
+    // Create a timestamp (e.g., 14:05:22.123)
+    const now = new Date();
+    const timeStr =
+      now.toTimeString().split(" ")[0] +
+      "." +
+      String(now.getMilliseconds()).padStart(3, "0");
+
+    div.innerHTML = `<span class="console-time">[${timeStr}]</span> ${msg}`;
+    consoleOutput.appendChild(div);
+
+    // Auto-scroll to the bottom
+    consoleOutput.scrollTop = consoleOutput.scrollHeight;
+  }
 
   function setStatus(state) {
     if (!statusIndicator) return;
@@ -56,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
     websocket.send(JSON.stringify({ command }));
   }
 
-  // --- NEW: Mode Switching Function ---
+  // --- Mode Switching Function ---
   window.setMode = function (modeValue) {
     if (websocket && websocket.readyState === WebSocket.OPEN) {
       websocket.send(
@@ -65,7 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
           mode: modeValue,
         }),
       );
-      console.log("Mode switched to: " + modeValue);
+      logToConsole("Switched mode: " + modeValue, "sys");
     }
   };
 
@@ -75,11 +97,16 @@ document.addEventListener("DOMContentLoaded", () => {
     websocket = new WebSocket(gateway);
 
     websocket.onopen = () => {
+      logToConsole(
+        "[NETWORK] Connection established. Telemetry stream started.",
+      );
+
       setStatus("online");
       initialPitchOffset = null;
     };
 
     websocket.onclose = () => {
+      logToConsole("[NETWORK] Connection lost. Attempting to reconnect...");
       setStatus("offline");
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
@@ -125,25 +152,77 @@ document.addEventListener("DOMContentLoaded", () => {
         if (typeof data.angular_velocity === "number")
           safeSetText(velVal, `${data.angular_velocity.toFixed(2)} deg/s`);
         if (errorVal) errorVal.innerHTML = `${currentRmsError.toFixed(3)}&deg;`;
-        if (typeof data.front_distance === "number")
-          safeSetText(fDistVal, `${data.front_distance.toFixed(2)} m`);
-
+        if (document.getElementById("cpuVal")) {
+          document.getElementById("cpuVal").innerText =
+            typeof data.cpu === "number"
+              ? " " + data.cpu.toFixed(1) + "%"
+              : " --%";
+        }
+        if (document.getElementById("val-dist-f"))
+          document.getElementById("val-dist-f").innerText =
+            typeof data.dist_f === "number"
+              ? data.dist_f.toFixed(1) + " cm"
+              : "0.0 cm";
+        if (document.getElementById("val-dist-b"))
+          document.getElementById("val-dist-b").innerText =
+            typeof data.dist_b === "number"
+              ? data.dist_b.toFixed(1) + " cm"
+              : "0.0 cm";
+        if (document.getElementById("val-dist-l"))
+          document.getElementById("val-dist-l").innerText =
+            typeof data.dist_l === "number"
+              ? data.dist_l.toFixed(1) + " cm"
+              : "0.0 cm";
+        if (document.getElementById("val-dist-r"))
+          document.getElementById("val-dist-r").innerText =
+            typeof data.dist_r === "number"
+              ? data.dist_r.toFixed(1) + " cm"
+              : "0.0 cm";
+        // if (document.getElementById("cpuVal")) {
+        //   document.getElementById("cpuVal").innerText =
+        //     typeof data.cpu === "number"
+        //       ? " " + data.cpu.toFixed(1) + "%"
+        //       : " --%";
+        // }
         if (isLoggingData && typeof data.pitch === "number") {
           const elapsedMs = (performance.now() - recordingStartTime).toFixed(0);
           telemetryLog.push([
             elapsedMs,
             displayRawPitch.toFixed(2),
             displayPitch.toFixed(2),
-            data.angular_velocity ? data.angular_velocity.toFixed(2) : "0.00",
-            currentRmsError.toFixed(3),
+            typeof data.angular_velocity === "number"
+              ? data.angular_velocity.toFixed(2)
+              : "0.00",
+            typeof data.dist_f === "number" ? data.dist_f.toFixed(1) : "0.0",
+            typeof data.dist_b === "number" ? data.dist_b.toFixed(1) : "0.0",
+            typeof data.dist_l === "number" ? data.dist_l.toFixed(1) : "0.0",
+            typeof data.dist_r === "number" ? data.dist_r.toFixed(1) : "0.0",
+            typeof data.raw_pot === "number" ? data.raw_pot.toFixed(0) : "0",
+            typeof data.pot_ohms === "number"
+              ? data.pot_ohms.toFixed(1)
+              : "0.0",
+            typeof data.pwm_fl === "number" ? data.pwm_fl.toFixed(0) : "0",
+            typeof data.pwm_fr === "number" ? data.pwm_fr.toFixed(0) : "0",
+            typeof data.pwm_bl === "number" ? data.pwm_bl.toFixed(0) : "0",
+            typeof data.pwm_br === "number" ? data.pwm_br.toFixed(0) : "0",
           ]);
         }
-        if (document.getElementById("val-rpm")) {
-          document.getElementById("val-rpm").innerText = data.rpm.toFixed(2);
+        // accounts for all wheels
+        if (document.getElementById("val-pwm-fl")) {
+          document.getElementById("val-pwm-fl").innerText =
+            typeof data.pwm_fl === "number" ? data.pwm_fl.toFixed(0) : "0";
         }
-        if (document.getElementById("val-velocity")) {
-          document.getElementById("val-velocity").innerText =
-            data.velocity.toFixed(2);
+        if (document.getElementById("val-pwm-fr")) {
+          document.getElementById("val-pwm-fr").innerText =
+            typeof data.pwm_fr === "number" ? data.pwm_fr.toFixed(0) : "0";
+        }
+        if (document.getElementById("val-pwm-bl")) {
+          document.getElementById("val-pwm-bl").innerText =
+            typeof data.pwm_bl === "number" ? data.pwm_bl.toFixed(0) : "0";
+        }
+        if (document.getElementById("val-pwm-br")) {
+          document.getElementById("val-pwm-br").innerText =
+            typeof data.pwm_br === "number" ? data.pwm_br.toFixed(0) : "0";
         }
       } catch (e) {
         console.error("Error parsing WebSocket JSON:", e);
@@ -183,28 +262,6 @@ document.addEventListener("DOMContentLoaded", () => {
     chartCtx.stroke();
   }
 
-  async function initCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (webcamFeed) webcamFeed.srcObject = stream;
-      mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) recordedChunks.push(e.data);
-      };
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: "video/webm" });
-        recordedChunks = [];
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `pendulum_video_${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
-        a.click();
-      };
-    } catch (err) {
-      console.error("Camera error:", err);
-    }
-  }
-
   function saveTelemetryCSV() {
     if (telemetryLog.length <= 1) return;
     let csvContent = telemetryLog.map((e) => e.join(",")).join("\n");
@@ -219,43 +276,69 @@ document.addEventListener("DOMContentLoaded", () => {
     URL.revokeObjectURL(url);
   }
 
-  initCamera();
+  // --- UNIFIED ARM & RECORD LOGIC ---
+  function toggleSystem(event) {
+    // Sync both buttons visually
+    const isRecording = playStopBtn.classList.toggle("is-recording");
 
-  if (playStopBtn) {
-    playStopBtn.addEventListener("click", () => {
-      const isRecording = playStopBtn.classList.toggle("is-recording");
+    if (armMotorsBtn) {
       if (isRecording) {
-        // --- NEW: Arm the robot ---
-        sendCommand("arm");
-
-        if (mediaRecorder && mediaRecorder.state === "inactive") {
-          recordedChunks = [];
-          mediaRecorder.start();
-        }
-        isLoggingData = true;
-        recordingStartTime = performance.now();
-        squaredErrors = [];
-        telemetryLog = [
-          [
-            "Time (ms)",
-            "Raw Pitch (deg)",
-            "Filtered Pitch (deg)",
-            "Velocity (deg/s)",
-            "RMS Filter Error (deg)",
-          ],
-        ];
+        armMotorsBtn.classList.add("is-armed");
+        armMotorsBtn.textContent = "DISARM MOTORS";
       } else {
-        // --- NEW: Stop the robot ---
-        sendCommand("estop");
+        armMotorsBtn.classList.remove("is-armed");
+        armMotorsBtn.textContent = "ARM MOTORS";
+      }
+    }
 
-        if (mediaRecorder && mediaRecorder.state === "recording")
-          mediaRecorder.stop();
-        isLoggingData = false;
+    if (isRecording) {
+      // 1. ARM THE ROBOT
+      sendCommand("arm");
+      logToConsole("SYSTEM ARMED: begin data logging", "warn");
+      // 2. START CSV LOGGING
+      isLoggingData = true;
+      recordingStartTime = performance.now();
+      squaredErrors = [];
+      telemetryLog = [
+        [
+          "Time (ms)",
+          "Raw Pitch (deg)",
+          "Filtered Pitch (deg)",
+          "Velocity (deg/s)",
+          "Front Dist (cm)",
+          "Back Dist (cm)",
+          "Left Dist (cm)",
+          "Right Dist (cm)",
+          "Raw Pot (ADC)",
+          "Pot Resistance (Ohms)",
+          "FL PWM",
+          "FR PWM",
+          "BL PWM",
+          "BR PWM",
+        ],
+      ];
+    } else {
+      // 1. E-STOP THE ROBOT
+      sendCommand("estop");
+      logToConsole("SYSTEM DISARMED: data saved", "info");
+
+      // 2. SAVE THE CSV FILE
+      isLoggingData = false;
+      if (event && event.currentTarget.id === "playStopBtn") {
         saveTelemetryCSV();
       }
-    });
+    }
   }
 
+  // Attach the same function to BOTH buttons
+  if (playStopBtn) {
+    playStopBtn.addEventListener("click", toggleSystem);
+  }
+  if (armMotorsBtn) {
+    armMotorsBtn.addEventListener("click", toggleSystem);
+  }
+
+  // --- SEND TUNING LOGIC ---
   if (sendTuneBtn) {
     sendTuneBtn.addEventListener("click", () => {
       const kp_val = parseFloat(kpInput.value);
@@ -270,14 +353,32 @@ document.addEventListener("DOMContentLoaded", () => {
             kd: kd_val,
           }),
         );
+        logToConsole(
+          `Tuning Sent - Kp: ${kp_val}, Ki: ${ki_val}, Kd: ${kd_val}`,
+          "sys",
+        );
       }
     });
   }
 
+  // --- E-STOP BUTTON LOGIC ---
   if (estopBtn) {
     estopBtn.addEventListener("click", () => {
       sendCommand("estop");
+      logToConsole("EMERGENCY STOP TRIGGERED", "err");
+
+      // Ensure UI resets visually if E-Stop is hit
       if (playStopBtn) playStopBtn.classList.remove("is-recording");
+      if (armMotorsBtn) {
+        armMotorsBtn.classList.remove("is-armed");
+        armMotorsBtn.textContent = "ARM MOTORS";
+      }
+
+      // Stop logging if active
+      if (isLoggingData) {
+        isLoggingData = false;
+        // saveTelemetryCSV();
+      }
     });
   }
 

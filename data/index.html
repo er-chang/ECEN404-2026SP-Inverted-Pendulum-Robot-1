@@ -34,8 +34,8 @@
                   type="radio"
                   name="mode-select"
                   id="mode-1"
-                  value="0"
-                  onchange="setMode(0)"
+                  value="1"
+                  onchange="setMode(1)"
                   checked
                 />
                 <label for="mode-1">1</label>
@@ -44,8 +44,8 @@
                   type="radio"
                   name="mode-select"
                   id="mode-2"
-                  value="1"
-                  onchange="setMode(1)"
+                  value="2"
+                  onchange="setMode(2)"
                 />
                 <label for="mode-2">2</label>
 
@@ -53,8 +53,8 @@
                   type="radio"
                   name="mode-select"
                   id="mode-3"
-                  value="2"
-                  onchange="setMode(2)"
+                  value="3"
+                  onchange="setMode(3)"
                 />
                 <label for="mode-3">3</label>
 
@@ -79,10 +79,10 @@
       <div class="item item-2">
         <h4>>> DYNAMICS & STABILITY</h4>
         <ul class="data-list">
-          <li>pitch angle (&theta;)<b id="pitchVal"> 0.00°</b></li>
-          <li>ang. velocity<b id="velVal"> 0.0 rad/s</b></li>
-          <li>rms filter error<b id="errorVal"> -- </b></li>
-          <li>stability margin<b id="stabilityVal">-- ;</b></li>
+          <li>angle (&theta;)<b id="pitchVal"> 0.00°</b></li>
+          <li>ang. v (ω)<b id="velVal"> 0.0 rad/s</b></li>
+          <!-- <li>rms filter error<b id="errorVal"> -- </b></li> -->
+          <!-- <li>stability margin<b id="stabilityVal">-- ;</b></li> -->
         </ul>
 
         <div
@@ -177,6 +177,18 @@
               "
             />
           </div>
+          <button
+            id="armMotorsBtn"
+            class="button-40 btn-arm"
+            style="
+              width: 100%;
+              font-size: 0.8rem;
+              padding: 0.4rem;
+              margin-bottom: 12px;
+            "
+          >
+            ARM MOTORS
+          </button>
 
           <button
             id="sendTuneBtn"
@@ -192,21 +204,50 @@
         <h4>>> NAVIGATION & MOTION</h4>
         <ul class="data-list">
           <li class="group-header">DISTANCE SENSING</li>
-          <li class="sub-item">&#x21B3; l-dist. <b id="lDistVal">-- </b></li>
-          <li class="sub-item">&#x21B3; f-dist. <b id="fDistVal">0.00 m</b></li>
-          <li class="sub-item">&#x21B3; r-dist. <b id="rDistVal">-- </b></li>
+          <li class="sub-item">&#x21B3; f-dist. <b id="fDistVal">0.0 cm</b></li>
+          <li class="sub-item">
+            &#x21B3; b-dist. <b id="bDistVal">0.0 cm </b>
+          </li>
+          <li class="sub-item">
+            &#x21B3; l-dist. <b id="lDistVal">0.0 cm </b>
+          </li>
+
+          <li class="sub-item">
+            &#x21B3; r-dist. <b id="rDistVal">0.0 cm </b>
+          </li>
           <div class="metric-card">
-            <h3>Wheel RPM</h3>
-            <span id="val-rpm" style="color: #f6f09c">0.00</span> RPM
+            <h3 style="margin-bottom: 5px">PWM</h3>
+            <div
+              style="
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 5px;
+                font-size: 0.9rem;
+              "
+            >
+              <div>
+                FL: <span id="val-pwm-fl" style="color: #f6f09c">0.00</span>
+              </div>
+              <div>
+                FR: <span id="val-pwm-fr" style="color: #f6f09c">0.00</span>
+              </div>
+              <div>
+                BL: <span id="val-pwm-bl" style="color: #f6f09c">0.00</span>
+              </div>
+              <div>
+                BR: <span id="val-pwm-br" style="color: #f6f09c">0.00</span>
+              </div>
+            </div>
           </div>
+
           <div class="metric-card">
-            <h3>Linear Velocity</h3>
+            <h3>LINEAR VELOCITY</h3>
             <span id="val-velocity" style="color: #f6f09c">0.00</span> m/s
           </div>
         </ul>
         <div class="section-container">
           <h4 class="section-header">>> ODOMETRY</h4>
-          <div class="data-row">
+          <div class="data-row" style="margin-top: -10px">
             <span>x,y coord.</span>
             <b id="odometryVal">0.00, 0.00</b>
           </div>
@@ -216,20 +257,24 @@
       <div class="item item-4">
         <h4>>> SYS. INTEGRITY</h4>
         <ul class="data-list">
-          <li>battery voltage<b id="batteryVal"> -- V</b></li>
+          <!-- <li>battery voltage<b id="batteryVal"> -- V</b></li> -->
           <li>cpu load<b id="cpuVal"> --</b></li>
           <li>wifi latency<b id="latencyVal"> 0.0 ms</b></li>
         </ul>
       </div>
 
-      <div class="item item-6"><h4>>> CONSOLE</h4></div>
+      <div class="item item-6">
+        <h4>>> CONSOLE</h4>
+        <div id="consoleOutput" class="console-output"></div>
+      </div>
     </div>
 
     <div class="container2">
-      <div class="item item-7 video-container">
+      <!-- <div class="item item-7 video-container">
         <h4>>> LIVE FEED</h4>
         <video id="webcamFeed" autoplay muted playsinline></video>
-      </div>
+      </div> -->
+
       <div class="item item-8 sparkline-container">
         <canvas id="pitchChart"></canvas>
       </div>

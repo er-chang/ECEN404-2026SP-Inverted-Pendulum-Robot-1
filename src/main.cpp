@@ -7,8 +7,8 @@
 #include <string.h>
 #include <ESPmDNS.h>
 
-const char* WIFI_SSID = "TAMU_IoT";
-const char* WIFI_PASS = "";  
+// const char* WIFI_SSID = "TAMU_IoT";
+// const char* WIFI_PASS = "";  
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -19,15 +19,26 @@ struct __attribute__((packed)) TelemetryPacket {
   float pitch_raw;
   float pitch_filtered;
   float angular_velocity;
-  float setpoint_error;
-  float front_distance;
-  uint32_t cpu_work_us;
-  
-  float pos_x;
-  float pos_y;
-  float linear_velocity;
-  float total_dist;
-  float wheel_rpm; 
+
+  // 4 Ultrasonic Sensors
+  float dist_front;
+  float dist_back;
+  float dist_left;
+  float dist_right;
+
+  float system_state; 
+
+  // 4 Motors
+  float pwm_fl;
+  float pwm_fr;
+  float pwm_bl;
+  float pwm_br;
+
+  // Potentiometer
+  float raw_pot;
+  float pot_ohms;
+
+  float cpu_load;
 };
 
 // 2. Updated to include Mode and padded to exactly 44 bytes
@@ -38,7 +49,7 @@ struct __attribute__((packed)) CommandPacket {
   float kp;
   float ki;
   float kd;
-  uint8_t padding2[28]; 
+  uint8_t padding2[40]; 
 };
 
 WORD_ALIGNED_ATTR TelemetryPacket rxTelemetry = {};
@@ -106,30 +117,44 @@ void setup() {
   slave.begin(VSPI);
   slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, sizeof(TelemetryPacket));
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
+  // CONNECTION USING IOT NETWORK
+  // WiFi.mode(WIFI_STA);
+  // WiFi.setSleep(false);
 
-  if (strlen(WIFI_PASS) > 0) {
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-  } else {
-    WiFi.begin(WIFI_SSID); 
-  }
+  // if (strlen(WIFI_PASS) > 0) {
+  //   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  // } else {
+  //   WiFi.begin(WIFI_SSID); 
+  // }
 
-  Serial.printf("Connecting to %s", WIFI_SSID);
-  int timeout = 0;
-  while (WiFi.status() != WL_CONNECTED && timeout < 30) {
-    delay(500);
-    Serial.print(".");
-    timeout++;
-  }
+  // Serial.printf("Connecting to %s", WIFI_SSID);
+  // int timeout = 0;
+  // while (WiFi.status() != WL_CONNECTED && timeout < 30) {
+  //   delay(500);
+  //   Serial.print(".");
+  //   timeout++;
+  // }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\nConnected! IP: %s\n", WiFi.localIP().toString().c_str());
-  } else {
-    Serial.println("\nFailed to connect, falling back to AP mode");
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP("IPR", "password", 6);
-  }
+  // if (WiFi.status() == WL_CONNECTED) {
+  //   Serial.printf("\nConnected! IP: %s\n", WiFi.localIP().toString().c_str());
+  // } else {
+  //   Serial.println("\nFailed to connect, falling back to AP mode");
+  //   WiFi.mode(WIFI_AP);
+  //   WiFi.softAP("IPR", "password", 6);
+  // }
+
+  // CONNECTION USING ESP NETWORK
+  // Force the ESP32 to be its own independent network
+  WiFi.mode(WIFI_AP);
+  
+  // set up network name and password
+  WiFi.softAP("IPR_Robot", "TAMUIPR1", 6, 0, 4); 
+
+  Serial.println("\nprivate network started");
+  Serial.print("Connect to: IPR_Robot\n");
+  Serial.print("Password:   TAMUIPR1\n");
+  Serial.print("Dashboard:  http://192.168.4.1\n");
+
 
   if (MDNS.begin("ipr")) {
     MDNS.addService("http", "tcp", 80);
@@ -158,18 +183,37 @@ void loop() {
     slave.queue((uint8_t *)&rxTelemetry, (uint8_t *)&txCommand, sizeof(TelemetryPacket));
   }
 
+  // STM32 packs system_state into front_distance (0.0 = motors off, 1.0 = armed).
+  // Stream telemetry ONLY while motors are armed, so the browser CSV recording
+  // captures exactly the arm -> safety-trip window and nothing else.
+  static bool prev_motors_on = false;
+  bool motors_on = (rxTelemetry.dist_front > 0.5f);
+  if (motors_on != prev_motors_on) {
+    Serial.printf("[Session] motors %s\n",
+                  motors_on ? "ARMED" : "DISARMED");
+    prev_motors_on = motors_on;
+  }
+
+  // fix: removed '&& motors_on' so the ESP32 always sends data
   if (now - lastWsSend >= 50 && ws.count() > 0) {
-    char json[400]; 
+    char json[600]; // <-- Increased buffer size
     snprintf(json, sizeof(json),
-             "{\"pitch\":%.2f,\"pitch_raw\":%.2f,\"angular_velocity\":%.2f,\"setpoint_error\":%.2f,\"front_distance\":%.2f,\"cpu_work_us\":%lu,\"rpm\":%.2f,\"velocity\":%.2f}",
-             esp_safe(rxTelemetry.pitch_filtered), 
-             esp_safe(rxTelemetry.pitch_raw), 
-             esp_safe(rxTelemetry.angular_velocity), 
-             esp_safe(rxTelemetry.setpoint_error), 
-             esp_safe(rxTelemetry.front_distance), 
-             rxTelemetry.cpu_work_us,
-             esp_safe(rxTelemetry.wheel_rpm),        
-             esp_safe(rxTelemetry.linear_velocity)); 
+             // vvv Added the "cpu" tag to the end of this string vvv
+             "{\"pitch\":%.2f,\"pitch_raw\":%.2f,\"angular_velocity\":%.2f,\"dist_f\":%.1f,\"dist_b\":%.1f,\"dist_l\":%.1f,\"dist_r\":%.1f,\"pwm_fl\":%.0f,\"pwm_fr\":%.0f,\"pwm_bl\":%.0f,\"pwm_br\":%.0f,\"raw_pot\":%.0f,\"pot_ohms\":%.1f,\"cpu\":%.1f}",
+             esp_safe(rxTelemetry.pitch_filtered),
+             esp_safe(rxTelemetry.pitch_raw),
+             esp_safe(rxTelemetry.angular_velocity),
+             esp_safe(rxTelemetry.dist_front),
+             esp_safe(rxTelemetry.dist_back),
+             esp_safe(rxTelemetry.dist_left),
+             esp_safe(rxTelemetry.dist_right),
+             esp_safe(rxTelemetry.pwm_fl),
+             esp_safe(rxTelemetry.pwm_fr),
+             esp_safe(rxTelemetry.pwm_bl),
+             esp_safe(rxTelemetry.pwm_br),
+             esp_safe(rxTelemetry.raw_pot),
+             esp_safe(rxTelemetry.pot_ohms),
+             esp_safe(rxTelemetry.cpu_load));
     ws.textAll(json);
     lastWsSend = now;
   }
