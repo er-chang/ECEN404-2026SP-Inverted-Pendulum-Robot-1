@@ -1,4 +1,1 @@
-# Inverted-Pendulum-Robot-1
-# This is the repository for the CAPSTONE project stated above.
-# This is where all code and project files should go.
-# Try to backup your files to this repository once a week.
+This branch contains experimental code that tests the main control logic. It may be unstable or fail to compile. For the finalized code (that contains operational skid-steer navigation and stability control), switch to the [**main** branch](https://github.com/er-chang/ECEN404-2026SP-Inverted-Pendulum-Robot-1/tree/main). 
