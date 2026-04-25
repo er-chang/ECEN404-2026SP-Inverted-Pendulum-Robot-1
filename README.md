@@ -5,6 +5,7 @@
 </p>
 <!-- <img width="3693" height="2638" alt="group" src="https://github.com/user-attachments/assets/39a3619b-3f00-4001-ab31-49569472c721" />
 <img width="1105" height="1424" alt="robot" src="https://github.com/user-attachments/assets/3a0d0305-3216-443b-be6a-4b7adc43d2b6" /> -->
+
 ## Team Members & Roles
 * **Eric Chang:** Communications - Git Architecture, Wireless Telemetry, Differential Drive Logic.
 * **Gage Fox:** Hardware Integration - PCB Design, Embedded Firmware Architecture.
