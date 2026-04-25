@@ -1,0 +1,3 @@
+../Core/Src/navigation.c:11:6:Nav_Init	16	static
+../Core/Src/navigation.c:23:6:Nav_UpdateStrategy	32	static
+../Core/Src/navigation.c:188:7:Nav_UpdateSteering	40	static
